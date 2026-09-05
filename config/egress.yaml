@@ -11,7 +11,7 @@ service:
 
 queue:
   backend: sqs
-  serializer: json
+  serializer: ${SERIALIZER:json}
   queues:
     egress: egress
   sqs:
