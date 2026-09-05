@@ -1,0 +1,16 @@
+# Local development dependencies for relay.
+#
+# ElasticMQ is an SQS-compatible in-memory queue server. It lets us exercise
+# the SQS code path (aioboto3 with a custom endpoint_url) without touching AWS
+# or incurring cost. The M0 baseline is measured here AND, separately, on real
+# SQS; ElasticMQ numbers are an upper bound (no network to AWS) and are labelled
+# as such in docs/BENCHMARKS.md.
+services:
+  elasticmq:
+    image: softwaremill/elasticmq-native:1.6.7
+    container_name: relay-elasticmq
+    ports:
+      - "9324:9324"   # SQS API (queue endpoint)
+      - "9325:9325"   # web UI / stats
+    volumes:
+      - ./config/elasticmq.conf:/opt/elasticmq.conf:ro
