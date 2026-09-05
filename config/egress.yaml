@@ -1,0 +1,22 @@
+service:
+  metrics_port: ${EGRESS_METRICS_PORT:9103}
+  log_level: ${LOG_LEVEL:INFO}
+  egress_queue: egress
+  workers: 16
+  connector_name: http
+  endpoint_url: ${EGRESS_ENDPOINT:http://127.0.0.1:8090/sink}
+  http_pool_limit: 100
+  request_timeout_s: 30.0
+  tps_limit: 0.0   # 0 = unlimited
+
+queue:
+  backend: sqs
+  serializer: json
+  queues:
+    egress: egress
+  sqs:
+    region: ${AWS_REGION:us-east-1}
+    endpoint_url: ${SQS_ENDPOINT:http://localhost:9324}
+    wait_time_seconds: 1
+    visibility_timeout: 60
+    max_pool_connections: 64
