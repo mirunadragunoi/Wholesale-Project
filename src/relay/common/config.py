@@ -56,6 +56,11 @@ class SqsConfig:
     wait_time_seconds: int = 20  # long polling
     visibility_timeout: int = 30
     max_number_of_messages: int = 10  # per receive call (SQS hard limit)
+    # HTTP connection pool for the SQS client. This is a hard concurrency ceiling:
+    # long-polling consumers each hold a connection for up to wait_time_seconds, so
+    # the pool must exceed the number of concurrent producers + consumers or they
+    # starve each other. botocore's default of 10 is far too low for this workload.
+    max_pool_connections: int = 50
 
     @staticmethod
     def from_dict(data: dict[str, Any]) -> SqsConfig:
@@ -66,6 +71,7 @@ class SqsConfig:
             wait_time_seconds=int(data.get("wait_time_seconds", 20)),
             visibility_timeout=int(data.get("visibility_timeout", 30)),
             max_number_of_messages=int(data.get("max_number_of_messages", 10)),
+            max_pool_connections=int(data.get("max_pool_connections", 50)),
         )
 
 

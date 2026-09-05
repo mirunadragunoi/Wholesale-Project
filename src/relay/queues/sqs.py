@@ -19,6 +19,7 @@ from collections.abc import Iterator, Sequence
 from typing import Any
 
 import aioboto3
+from botocore.config import Config as BotoConfig
 
 from relay.common.config import QueueConfig
 from relay.common.logging import get_logger
@@ -57,9 +58,7 @@ class SqsProducer(Producer):
     async def publish(self, messages: Sequence[Message]) -> None:
         if not messages:
             return
-        await asyncio.gather(
-            *(self._send_batch(chunk) for chunk in _chunks(messages, _MAX_BATCH))
-        )
+        await asyncio.gather(*(self._send_batch(chunk) for chunk in _chunks(messages, _MAX_BATCH)))
 
     async def _send_batch(self, chunk: Sequence[Message]) -> None:
         entries: list[dict[str, Any]] = []
@@ -67,17 +66,13 @@ class SqsProducer(Producer):
             body, is_b64 = _encode_body(self._serializer.encode(msg))
             entry: dict[str, Any] = {"Id": str(i), "MessageBody": body}
             if is_b64:
-                entry["MessageAttributes"] = {
-                    "b64": {"DataType": "String", "StringValue": "1"}
-                }
+                entry["MessageAttributes"] = {"b64": {"DataType": "String", "StringValue": "1"}}
             entries.append(entry)
 
         pending = entries
         for attempt in range(_SEND_RETRIES):
             with queue_publish_duration_seconds.labels(self._label).time():
-                resp = await self._client.send_message_batch(
-                    QueueUrl=self._url, Entries=pending
-                )
+                resp = await self._client.send_message_batch(QueueUrl=self._url, Entries=pending)
             failed = resp.get("Failed") or []
             if not failed:
                 return
@@ -134,9 +129,7 @@ class SqsConsumer(Consumer):
             sys_attrs = m.get("Attributes") or {}
             if "SentTimestamp" in sys_attrs:
                 sent_at = int(sys_attrs["SentTimestamp"]) / 1000.0
-                queue_consume_lag_seconds.labels(self._label).set(
-                    max(0.0, time.time() - sent_at)
-                )
+                queue_consume_lag_seconds.labels(self._label).set(max(0.0, time.time() - sent_at))
             out.append(ReceivedMessage(message, m["ReceiptHandle"], sent_at))
         return out
 
@@ -165,7 +158,11 @@ class SqsBackend(QueueBackend):
 
     async def start(self) -> None:
         sqs = self._config.sqs
-        kwargs: dict[str, Any] = {"region_name": sqs.region}
+        boto_config = BotoConfig(
+            max_pool_connections=sqs.max_pool_connections,
+            retries={"max_attempts": 3, "mode": "standard"},
+        )
+        kwargs: dict[str, Any] = {"region_name": sqs.region, "config": boto_config}
         if sqs.endpoint_url:
             # ElasticMQ / local: dummy credentials, still required for signing.
             kwargs.update(

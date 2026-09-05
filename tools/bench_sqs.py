@@ -24,6 +24,7 @@ import asyncio
 import contextlib
 import json
 import statistics
+import sys
 import time
 from collections import deque
 from dataclasses import asdict, dataclass
@@ -50,8 +51,13 @@ def _make_messages(count: int, text_size: int) -> list[Message]:
     now = time.time()
     return [
         Message(
-            id=new_ulid(), to="+40712345678", text=text, sender="RELAY",
-            source="http", received_at=now, attributes={},
+            id=new_ulid(),
+            to="+40712345678",
+            text=text,
+            sender="RELAY",
+            source="http",
+            received_at=now,
+            attributes={},
         )
         for _ in range(count)
     ]
@@ -84,9 +90,7 @@ def measure_serialization(sample: Message, iterations: int = 50_000) -> list[Ser
 
 async def bench_producer(backend: SqsBackend, messages: list[Message], concurrency: int) -> float:
     producer = await backend.producer("bench")
-    batches: deque[list[Message]] = deque(
-        messages[i : i + 10] for i in range(0, len(messages), 10)
-    )
+    batches: deque[list[Message]] = deque(messages[i : i + 10] for i in range(0, len(messages), 10))
 
     async def worker() -> None:
         while batches:
@@ -99,25 +103,30 @@ async def bench_producer(backend: SqsBackend, messages: list[Message], concurren
     return len(messages) / elapsed
 
 
-async def bench_consumer(backend: SqsBackend, total: int, concurrency: int) -> float:
+async def bench_consumer(backend: SqsBackend, total: int, concurrency: int) -> tuple[float, int]:
+    """Return (throughput, actually_consumed). All ``total`` messages are already
+    enqueued before this runs, so an empty-poll streak means the queue is drained."""
     consumer = await backend.consumer("bench")
     consumed = 0
     start = time.perf_counter()
 
     async def worker() -> None:
         nonlocal consumed
+        empty_streak = 0
         while consumed < total:
             batch = await consumer.receive(max_messages=10)
             if not batch:
-                if consumed >= total:
+                empty_streak += 1
+                if empty_streak >= 3:  # queue drained; stop rather than spin
                     return
                 continue
+            empty_streak = 0
             consumed += len(batch)
             await consumer.delete([r.handle for r in batch])
 
     await asyncio.gather(*(worker() for _ in range(concurrency)))
     elapsed = time.perf_counter() - start
-    return total / elapsed
+    return consumed / elapsed, consumed
 
 
 async def bench_roundtrip(
@@ -127,32 +136,43 @@ async def bench_roundtrip(
     consumer = await backend.consumer("bench")
     latencies: list[float] = []
     text = "x" * text_size
+    sent_done = asyncio.Event()
 
     async def send_all() -> None:
-        pending: deque[Message] = deque(
-            Message(
-                id=new_ulid(), to="+40712345678", text=text, sender="RELAY",
-                source="http", received_at=0.0, attributes={},
-            )
-            for _ in range(count)
-        )
-        batch: list[Message] = []
-        while pending:
-            m = pending.popleft()
-            # Stamp send time as late as possible (its intended use).
-            batch.append(
-                Message(m.id, m.to, m.text, m.sender, m.source, time.time(), m.attributes)
-            )
-            if len(batch) == 10 or not pending:
-                await producer.publish(batch)
-                batch = []
+        try:
+            batch: list[Message] = []
+            for i in range(count):
+                # received_at is stamped as late as possible: its intended use.
+                batch.append(
+                    Message(
+                        id=new_ulid(),
+                        to="+40712345678",
+                        text=text,
+                        sender="RELAY",
+                        source="http",
+                        received_at=time.time(),
+                        attributes={},
+                    )
+                )
+                if len(batch) == 10 or i == count - 1:
+                    await producer.publish(batch)
+                    batch = []
+        finally:
+            sent_done.set()
 
     async def receive_all() -> None:
+        empty_streak = 0
         while len(latencies) < count:
             got = await consumer.receive(max_messages=10)
             recv = time.time()
             if not got:
+                # Only give up once the sender is finished and the queue is dry.
+                if sent_done.is_set():
+                    empty_streak += 1
+                    if empty_streak >= 3:
+                        return
                 continue
+            empty_streak = 0
             latencies.extend(recv - r.message.received_at for r in got)
             await consumer.delete([r.handle for r in got])
 
@@ -165,7 +185,7 @@ async def bench_roundtrip(
         "p50_ms": round(_percentile(latencies, 0.50) * 1000, 3),
         "p95_ms": round(_percentile(latencies, 0.95) * 1000, 3),
         "p99_ms": round(_percentile(latencies, 0.99) * 1000, 3),
-        "mean_ms": round(statistics.fmean(latencies) * 1000, 3),
+        "mean_ms": round(statistics.fmean(latencies) * 1000, 3) if latencies else float("nan"),
         "samples": float(len(latencies)),
     }
 
@@ -176,6 +196,8 @@ def _build_backend(args: argparse.Namespace) -> SqsBackend:
         endpoint_url=args.endpoint_url,
         wait_time_seconds=args.wait_time,
         visibility_timeout=60,
+        # Pool must exceed concurrency, else long-polling consumers starve producers.
+        max_pool_connections=args.concurrency + 8,
     )
     config = QueueConfig(
         backend="sqs", serializer=args.serializer, queues={"bench": args.queue}, sqs=sqs
@@ -195,14 +217,21 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
     messages = _make_messages(args.count, args.text_size)
     ser_results = measure_serialization(messages[0])
 
+    def progress(stage: str) -> None:
+        print(f"[bench] {stage}", file=sys.stderr, flush=True)
+
     backend = _build_backend(args)
     await backend.start()
     try:
         await _prepare_queue(backend)
+        progress("producer...")
         producer_tps = await bench_producer(backend, messages, args.concurrency)
-        consumer_tps = await bench_consumer(backend, args.count, args.concurrency)
+        progress(f"producer done: {producer_tps:.0f}/s; consumer...")
+        consumer_tps, consumed = await bench_consumer(backend, args.count, args.concurrency)
+        progress(f"consumer done: {consumer_tps:.0f}/s ({consumed}/{args.count}); roundtrip...")
         await _prepare_queue(backend)
         roundtrip = await bench_roundtrip(backend, args.rt_count, args.concurrency, args.text_size)
+        progress("roundtrip done")
     finally:
         await backend.close()
 
@@ -212,6 +241,7 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
         "region": args.region,
         "serializer": args.serializer,
         "count": args.count,
+        "consumed": consumed,
         "concurrency": args.concurrency,
         "text_size": args.text_size,
         "producer_tps": round(producer_tps, 1),
