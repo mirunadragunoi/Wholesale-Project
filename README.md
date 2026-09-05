@@ -25,7 +25,7 @@ measured results and `docs/ARCHITECTURE.md` for design decisions.
 
 | Milestone | Scope | State |
 |-----------|-------|-------|
-| M0 | Foundation + isolated SQS baseline | in progress |
+| M0 | Foundation + isolated SQS baseline | done (ElasticMQ; real-AWS run pending credentials) |
 | M1 | HTTP → SQS → engine → SQS → HTTP flow | pending |
 | M2 | SMPP codec + client (egress) | pending |
 | M3 | SMPP server (ingress) + CSV | pending |
