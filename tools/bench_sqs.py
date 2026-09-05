@@ -267,10 +267,19 @@ def main() -> None:
     parser.add_argument("--text-size", type=int, default=20)
     parser.add_argument("--wait-time", type=int, default=1, help="long-poll seconds")
     parser.add_argument("--serializer", default="json", choices=["json", "msgpack"])
+    parser.add_argument("--uvloop", action="store_true", help="use uvloop event loop (Linux/macOS)")
     parser.add_argument("--out", default=None, help="write raw JSON result to this path")
     args = parser.parse_args()
 
+    loop_name = "asyncio"
+    if args.uvloop:
+        import uvloop
+
+        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+        loop_name = "uvloop"
+
     result = asyncio.run(run(args))
+    result["event_loop"] = loop_name
     _print_report(result)
     if args.out:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
