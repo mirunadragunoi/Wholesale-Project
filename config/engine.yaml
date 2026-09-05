@@ -1,0 +1,19 @@
+service:
+  metrics_port: ${ENGINE_METRICS_PORT:9102}
+  log_level: ${LOG_LEVEL:INFO}
+  in_queue: ingress
+  out_queue: egress
+  workers: 16
+
+queue:
+  backend: sqs
+  serializer: json
+  queues:
+    ingress: ingress
+    egress: egress
+  sqs:
+    region: ${AWS_REGION:us-east-1}
+    endpoint_url: ${SQS_ENDPOINT:http://localhost:9324}
+    wait_time_seconds: 1
+    visibility_timeout: 60
+    max_pool_connections: 64
