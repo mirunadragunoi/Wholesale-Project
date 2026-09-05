@@ -213,3 +213,40 @@ de transfer pe SQS real — de remăsurat acolo).
 - [ ] **uvloop pe workload cu mai mult I/O de rețea real** (SQS real, cu RTT) —
       s-ar putea comporta diferit decât pe ElasticMQ localhost.
 - [ ] Mediul rămâne un singur laptop; fără test pe instanțe separate / rețea reală.
+
+---
+
+# M2 — SMPP egress (măsurători, Linux · uvloop · ElasticMQ)
+
+Flux: HTTP ingress → SQS → engine → SQS → **SMPP egress** → `smpp_sink`.
+Uneltele existente (`loadgen`, `smpp_sink`), fără unelte noi de benchmark.
+
+## Măsurat
+
+| Scenariu | Rezultat |
+|---|---|
+| Debit SMPP egress (20k mesaje, saturație, 2 binduri) | **~2 100 msg/s**, 20 000/20 000 acked, pierderi 0 |
+| Debit HTTP egress (referință M1.5) | ~2 040 msg/s |
+| Reziliență: `smpp_sink` omorât ~8 s în timpul traficului (8k mesaje) | **8 000/8 000 livrate, pierderi 0**; 4 026 `no_bind` reîncercate prin redelivery; ambele binduri revenite la starea „bound"; 4 conexiuni la sink (2 iniţiale + 2 reconectări) |
+
+## Dedus
+
+- **SMPP egress ≈ HTTP egress ca debit** (2100 vs 2040 msg/s). [din tabel] Nu e
+  surprinzător: ambele sunt gâtuite de același ElasticMQ, nu de conector. Codecul
+  SMPP rulează pe bytes, sincron și rapid — nu apare ca factor. Consecvent cu
+  concluzia M1.5 (gâtuirea e broker-ul pe ElasticMQ).
+- **Reconectarea + redelivery-ul garantează livrarea fără pierdere** la o cădere
+  bruscă a furnizorului. [din testul de reziliență] Mesajele prinse în fereastra
+  de indisponibilitate nu se confirmă (rezultat `no_bind`/`temporary`), deci coada
+  le redă după visibility timeout — retry pe temporar, niciodată pe permanent.
+- **Notă de contenție client (element deschis M1.5→M2):** nu am observat lock-uri
+  sau sesiuni partajate care să limiteze scalarea în conectorul SMPP — token
+  bucket-ul e partajat (intenționat, limită pe furnizor) și serializează doar
+  emisia, nu procesarea. Rămâne de văzut pe SQS real dacă pool-urile de conexiuni
+  (SQS + binduri SMPP) introduc contenția văzută la 4 instanțe în M1.5.
+
+## Nemăsurat (rămâne pentru M3/M4)
+
+- Debit prin **SMPP ingress** (serverul) vs HTTP ingress — M3.
+- Comportamentul sub `ESME_RTHROTTLED` real la volum (shaper vs throttle furnizor).
+- Toate cele de mai sus pe **SQS real** (fără credențiale).

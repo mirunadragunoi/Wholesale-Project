@@ -31,5 +31,5 @@ queue:
     region: ${AWS_REGION:us-east-1}
     endpoint_url: ${SQS_ENDPOINT:http://localhost:9324}
     wait_time_seconds: 1
-    visibility_timeout: 60
+    visibility_timeout: ${EGRESS_VISIBILITY:60}
     max_pool_connections: 64
