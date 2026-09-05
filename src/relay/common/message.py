@@ -83,6 +83,4 @@ def get_serializer(name: str) -> Serializer:
     try:
         return _SERIALIZERS[name]
     except KeyError:
-        raise ValueError(
-            f"unknown serializer {name!r}; known: {sorted(_SERIALIZERS)}"
-        ) from None
+        raise ValueError(f"unknown serializer {name!r}; known: {sorted(_SERIALIZERS)}") from None

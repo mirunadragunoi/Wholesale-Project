@@ -31,8 +31,13 @@ def test_serializer_roundtrip(name: str) -> None:
 def test_serializer_roundtrip_none_sender_empty_attrs(name: str) -> None:
     ser = get_serializer(name)
     msg = Message(
-        id=new_ulid(), to="+40700000000", text="", sender=None,
-        source="csv", received_at=1.5, attributes={},
+        id=new_ulid(),
+        to="+40700000000",
+        text="",
+        sender=None,
+        source="csv",
+        received_at=1.5,
+        attributes={},
     )
     assert ser.decode(ser.encode(msg)) == msg
 

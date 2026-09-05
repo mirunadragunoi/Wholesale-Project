@@ -13,8 +13,20 @@ from prometheus_client import Counter, Gauge, Histogram, start_http_server
 
 # Latency buckets in seconds: fine-grained below ~100ms, coarser out to 10s.
 _LATENCY_BUCKETS = (
-    0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1,
-    0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+    0.0005,
+    0.001,
+    0.0025,
+    0.005,
+    0.01,
+    0.025,
+    0.05,
+    0.1,
+    0.25,
+    0.5,
+    1.0,
+    2.5,
+    5.0,
+    10.0,
 )
 
 ingress_received_total = Counter(

@@ -11,8 +11,13 @@ from relay.queues.memory import MemoryBackend
 
 def _msg(i: int) -> Message:
     return Message(
-        id=f"id{i:06d}", to="+40712345678", text=f"msg {i}",
-        sender=None, source="http", received_at=time.time(), attributes={},
+        id=f"id{i:06d}",
+        to="+40712345678",
+        text=f"msg {i}",
+        sender=None,
+        source="http",
+        received_at=time.time(),
+        attributes={},
     )
 
 
