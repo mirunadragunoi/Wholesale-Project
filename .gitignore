@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# Environment / secrets
+.env
+config/*.local.yaml
+# Real config files may hold credentials; only *.example is committed.
+config/secrets.yaml
+
+# IDE
+.idea/
+.vscode/
+
+# Generated test data (see tools/ for generators)
+*.csv
+!tests/**/*.csv
+
+# Profiling output
+*.svg
+*.speedscope
+*.prof
+py-spy-*.txt
+
+# Raw benchmark output (reports in docs/ are committed, raw data is not)
+bench_out/
+*.bench.json
