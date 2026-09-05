@@ -1,0 +1,22 @@
+service:
+  http_host: ${INGRESS_HOST:0.0.0.0}
+  http_port: ${INGRESS_PORT:8080}
+  metrics_port: ${INGRESS_METRICS_PORT:9101}
+  log_level: ${LOG_LEVEL:INFO}
+  auth_token: ${RELAY_TOKEN:devtoken}
+  ingress_queue: ingress
+  internal_queue_maxsize: 20000
+  publisher_workers: 16
+  max_batch_size: 1000
+
+queue:
+  backend: sqs
+  serializer: json
+  queues:
+    ingress: ingress
+  sqs:
+    region: ${AWS_REGION:us-east-1}
+    endpoint_url: ${SQS_ENDPOINT:http://localhost:9324}
+    wait_time_seconds: 1
+    visibility_timeout: 60
+    max_pool_connections: 64
