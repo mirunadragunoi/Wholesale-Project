@@ -123,6 +123,44 @@ class HttpIngressConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class SmppIngressConfig:
+    host: str = "0.0.0.0"  # dev POC binds all interfaces by design
+    port: int = 2775
+    metrics_port: int = 9104
+    log_level: str = "INFO"
+    ingress_queue: str = "ingress"
+    internal_queue_maxsize: int = 20_000  # full -> ESME_RMSGQFUL (backpressure)
+    publisher_workers: int = 16
+    credentials: dict[str, str] = field(default_factory=lambda: {"esme": "password"})
+    ip_allowlist: tuple[str, ...] = ()
+    max_binds_per_system: int = 4
+    tps_per_system: float = 0.0
+    smsc_system_id: str = "relay-smsc"
+    queue: QueueConfig = field(default_factory=QueueConfig)
+
+    @staticmethod
+    def from_dict(data: dict[str, Any]) -> SmppIngressConfig:
+        svc = data.get("service", {})
+        creds = svc.get("credentials", {"esme": "password"})
+        allowlist = svc.get("ip_allowlist", [])
+        return SmppIngressConfig(
+            host=str(svc.get("host", "0.0.0.0")),
+            port=int(svc.get("port", 2775)),
+            metrics_port=int(svc.get("metrics_port", 9104)),
+            log_level=str(svc.get("log_level", "INFO")),
+            ingress_queue=str(svc.get("ingress_queue", "ingress")),
+            internal_queue_maxsize=int(svc.get("internal_queue_maxsize", 20_000)),
+            publisher_workers=int(svc.get("publisher_workers", 16)),
+            credentials={str(k): str(v) for k, v in creds.items()},
+            ip_allowlist=tuple(str(ip) for ip in allowlist),
+            max_binds_per_system=int(svc.get("max_binds_per_system", 4)),
+            tps_per_system=float(svc.get("tps_per_system", 0.0)),
+            smsc_system_id=str(svc.get("smsc_system_id", "relay-smsc")),
+            queue=QueueConfig.from_dict(data.get("queue", {})),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class EngineConfig:
     metrics_port: int = 9102
     log_level: str = "INFO"
