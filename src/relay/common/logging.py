@@ -19,9 +19,11 @@ import sys
 import time
 from typing import Any, TextIO
 
-_RESERVED = frozenset(
-    logging.makeLogRecord({}).__dict__.keys()
-) | {"message", "asctime", "taskName"}
+_RESERVED = frozenset(logging.makeLogRecord({}).__dict__.keys()) | {
+    "message",
+    "asctime",
+    "taskName",
+}
 
 
 class JsonFormatter(logging.Formatter):
