@@ -293,3 +293,41 @@ NEVALIDATĂ pe ElasticMQ**: bindurile nu sunt limita, broker-ul e. Dacă ar scal
 SQS real (broker distribuit) rămâne aceeași ipoteză nemăsurată. Ieftin de aflat,
 important: dacă mai târziu pe SQS real bindurile tot nu scalează, ar fi un semnal
 de contenție în client (element deschis M1.5).
+
+---
+
+# M3 — SMPP server (ingress) și CSV (măsurători, Linux · uvloop · ElasticMQ)
+
+## Măsurat
+
+| Scenariu | Rezultat |
+|---|---|
+| SMPP ingress — rată de acceptare (driver: 4 binduri × 10, 20k mesaje) | **3 832 submit_sm/s** acceptate, 0 `ESME_RMSGQFUL`, 0 pierdute |
+| SMPP ingress — debit end-to-end (SMPP→coadă→engine→HTTP egress→sink) | **1 988 msg/s**, 20 000/20 000 livrate |
+| HTTP ingress — debit end-to-end (referință M1.5) | ~2 040 msg/s |
+| CSV 5M linii — memorie | **RSS de vârf PLAT ~50 MB** de la 1M la 5M linii; 4 999 951 trimise, **49 linii invalide sărite**, procesare 38 s (in-proces) |
+| `submit_sm_resp` sub 100 ms | da (test unitar: <100 ms; sub sarcină, acceptare fără procesare sincronă) |
+
+## Dedus
+
+- **SMPP ingress ≈ HTTP ingress ca debit end-to-end** (1988 vs 2040 msg/s). [tabel]
+  Ambele sunt gâtuite de ElasticMQ, nu de conector. Rata de acceptare a SMPP
+  ingress (3832/s) e mai mare decât drenarea (1988/s), deci conectorul de intrare
+  **nu** e limita — bufferul intern absoarbe, iar la umplere ar returna
+  `ESME_RMSGQFUL` (echivalentul SMPP al lui 429; testat unitar). Consecvent cu
+  concluzia că broker-ul e plafonul.
+- **CSV procesează 5M linii în memorie mărginită (~50 MB, plată).** [tabel] Doar
+  un chunk de rânduri + un batch de publicare sunt în memorie; RSS nu crește cu
+  dimensiunea fișierului. Liniile invalide se sar și se loghează, nu opresc rularea.
+  Cei 131k rânduri/s (in-proces, fără rețea) sunt rata de parsare+publish a
+  conectorului, nu a conductei.
+- **Backpressure la ingress SMPP e real** (`ESME_RMSGQFUL` pe buffer plin, nu
+  bufferare nelimitată), la fel ca 429-ul HTTP.
+
+## Nemăsurat / de reținut
+
+- `ESME_RTHROTTLED` (throttle per credențial la server, și shaper-ul agregat pe
+  furnizor la egress) — testat unitar, nemăsurat sub sarcină la volum.
+- Reasamblarea multi-part la ingress e prin **pass-through transparent**
+  (esm_class + UDH păstrate în `attributes`), nu reasamblare reală — vezi SMPP.md.
+- Toate pe ElasticMQ; **SQS real rămâne nemăsurat** (fără credențiale).

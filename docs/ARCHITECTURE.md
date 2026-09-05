@@ -163,6 +163,36 @@ Vezi BENCHMARKS.md pentru cifre. Pe scurt:
 măsurătorile pe Windows nu sunt comparabile (ProactorEventLoop taie ~2/3 din
 debit). Toate cifrele de referință de aici încolo se iau pe Linux.
 
+## M2 / M3 — SMPP și CSV
+
+- **Codec propriu, nu librărie.** Ca să înțelegem protocolul și să putem adapta
+  comportamentul per furnizor. Vezi `docs/SMPP.md`. Testat la nivel de octet.
+- **Clasificarea erorilor e explicită** (`constants.classify` → OK / TEMPORARY /
+  PERMANENT / FATAL). Decizia de retry nu e implicită: retry pe temporar, drop pe
+  permanent, tear-down pe fatal.
+- **Timeout ≠ eșec.** `SUBMIT_TIMEOUT` e status distinct; retry prin redelivery,
+  nu retrimitere oarbă (ar dubla).
+- **Pass-through transparent la multi-part (decizie aprobată M3).** Anvelopa
+  `Message` NU se schimbă structural. Serverul SMPP păstrează `esm_class`,
+  `data_coding` și octeții `short_message` (inclusiv UDH) în `attributes`; egress-ul
+  SMPP trimite octeții originali dacă sunt prezenți (concatenarea supraviețuiește
+  SMPP→SMPP), altfel encodează din `text`. Alternativa (reasamblare completă la
+  ingress) a fost respinsă ca prea costisitoare pentru POC.
+- **Duplicate = element deschis, NU reparat.** Semantica e „cel puțin o dată":
+  un `submit_sm_resp` pierdut duce la redelivery → furnizorul primește mesajul de
+  două ori. Măsurat ~0,29% la pierderi forțate de răspuns. De rezolvat în faza de
+  idempotență (dedup pe ULID). Vezi SMPP.md și BENCHMARKS.md.
+- **Backpressure SMPP e `ESME_RMSGQFUL`** pe buffer intern plin — echivalentul
+  SMPP al lui HTTP 429. Buffer mărginit, nu bufferare nelimitată.
+- **CSV: citire în streaming, I/O blocant pe thread.** `csv.DictReader` citește un
+  chunk de rânduri o dată, iar citirea (blocantă) rulează în `asyncio.to_thread`,
+  niciodată pe event loop. Memorie mărginită (~50 MB pe 5M linii): doar un chunk +
+  un batch în memorie. Linii invalide sărite și logate, nu opresc rularea.
+- **Contenție client (element deschis M1.5):** neobservată în conectorii SMPP.
+  Token bucket-ul egress e partajat intenționat (limită pe furnizor). Scalarea pe
+  binduri e plată pe ElasticMQ (broker-bound), deci nu putem încă vedea dacă
+  bindurile ar introduce contenție pe un broker care scalează.
+
 ## Note de mediu (specifice acestei mașini)
 
 - `uv` nu e disponibil → gestiune cu `pip` + `pyproject.toml` (permis de spec).

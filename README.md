@@ -28,8 +28,8 @@ measured results and `docs/ARCHITECTURE.md` for design decisions.
 | M0 | Foundation + isolated SQS baseline | done (ElasticMQ; real-AWS run pending credentials) |
 | M1 | HTTP → SQS → engine → SQS → HTTP flow | done (ElasticMQ) |
 | M1.5 | Measurement round: Linux/uvloop, horizontal scaling, 429 fix, JSON/msgpack | done (ElasticMQ; real-AWS still pending) |
-| M2 | SMPP codec + client (egress) | pending |
-| M3 | SMPP server (ingress) + CSV | pending |
+| M2 | Own SMPP codec + client (egress) | done (ElasticMQ) |
+| M3 | SMPP server (ingress) + streaming CSV | done (ElasticMQ) |
 | M4 | Full benchmarks + report | pending |
 
 ## Requirements
