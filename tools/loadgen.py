@@ -12,12 +12,15 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import random
 import time
-from collections import deque
 
 import aiohttp
 
 from relay.egress.shaper import TokenBucket
+
+_RETRY_BASE_S = 0.05
+_RETRY_MAX_S = 2.0
 
 
 def _percentile(values: list[float], pct: float) -> float:
@@ -30,8 +33,8 @@ def _percentile(values: list[float], pct: float) -> float:
     return ordered[lo] + (ordered[hi] - ordered[lo]) * (k - lo)
 
 
-def _build_batches(count: int, batch_size: int, text: str) -> deque[list[dict[str, str]]]:
-    batches: deque[list[dict[str, str]]] = deque()
+def _build_batches(count: int, batch_size: int, text: str) -> list[list[dict[str, str]]]:
+    batches: list[list[dict[str, str]]] = []
     remaining = count
     while remaining > 0:
         n = min(batch_size, remaining)
@@ -40,38 +43,59 @@ def _build_batches(count: int, batch_size: int, text: str) -> deque[list[dict[st
     return batches
 
 
+def _backoff_delay(attempt: int) -> float:
+    """Full-jitter exponential backoff: random in [0, min(cap, base*2**attempt)]."""
+    ceiling = min(_RETRY_MAX_S, _RETRY_BASE_S * (2**attempt))
+    return random.uniform(0, ceiling)
+
+
 async def _send(
     session: aiohttp.ClientSession,
     url: str,
     token: str,
-    batches: deque[list[dict[str, str]]],
+    batches: list[list[dict[str, str]]],
     shaper: TokenBucket,
 ) -> tuple[list[float], int, int]:
     accept_latencies: list[float] = []
     accepted = 0
     rejected = 0
     headers = {"X-Auth-Token": token}
-    while batches:
-        batch = batches.popleft()
-        await shaper.acquire(len(batch))  # pace submission to --rate (no-op if 0)
-        t0 = time.perf_counter()
-        try:
-            async with session.post(
-                f"{url}/v1/messages/batch", json={"messages": batch}, headers=headers
-            ) as resp:
-                await resp.read()
-                if resp.status == 202:
-                    accepted += len(batch)
-                elif resp.status == 429:
-                    rejected += len(batch)
-                    batches.append(batch)  # retry later (backpressure)
-                    await asyncio.sleep(0.05)
-        except Exception:
-            batches.append(batch)
-            await asyncio.sleep(0.05)
-            continue
-        accept_latencies.append((time.perf_counter() - t0) * 1000.0)
+    for batch in batches:
+        attempt = 0
+        while True:
+            await shaper.acquire(len(batch))  # pace submission to --rate (no-op if 0)
+            t0 = time.perf_counter()
+            try:
+                async with session.post(
+                    f"{url}/v1/messages/batch", json={"messages": batch}, headers=headers
+                ) as resp:
+                    await resp.read()
+                    status = resp.status
+            except Exception:
+                await asyncio.sleep(_backoff_delay(attempt))
+                attempt += 1
+                continue
+            if status == 202:
+                accepted += len(batch)
+                accept_latencies.append((time.perf_counter() - t0) * 1000.0)
+                break
+            if status == 429:
+                # Backpressure: exponential backoff with full jitter before retry.
+                rejected += len(batch)
+                await asyncio.sleep(_backoff_delay(attempt))
+                attempt += 1
+                continue
+            # Unexpected status: count as rejected and give up on this batch.
+            rejected += len(batch)
+            break
     return accept_latencies, accepted, rejected
+
+
+def _partition(batches: list[list[dict[str, str]]], parts: int) -> list[list[list[dict[str, str]]]]:
+    chunks: list[list[list[dict[str, str]]]] = [[] for _ in range(parts)]
+    for i, batch in enumerate(batches):
+        chunks[i % parts].append(batch)
+    return chunks
 
 
 async def _wait_for_sink(
@@ -105,9 +129,11 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
                 await resp.read()
 
         shaper = TokenBucket(args.rate, capacity=max(args.rate, args.batch_size))
+        worker_batches = _partition(batches, args.concurrency)
         start = time.perf_counter()
         senders = [
-            _send(session, args.url, args.token, batches, shaper) for _ in range(args.concurrency)
+            _send(session, args.url, args.token, worker_batches[i], shaper)
+            for i in range(args.concurrency)
         ]
         results = await asyncio.gather(*senders)
         submit_elapsed = time.perf_counter() - start
