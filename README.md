@@ -27,6 +27,7 @@ measured results and `docs/ARCHITECTURE.md` for design decisions.
 |-----------|-------|-------|
 | M0 | Foundation + isolated SQS baseline | done (ElasticMQ; real-AWS run pending credentials) |
 | M1 | HTTP → SQS → engine → SQS → HTTP flow | done (ElasticMQ) |
+| M1.5 | Measurement round: Linux/uvloop, horizontal scaling, 429 fix, JSON/msgpack | done (ElasticMQ; real-AWS still pending) |
 | M2 | SMPP codec + client (egress) | pending |
 | M3 | SMPP server (ingress) + CSV | pending |
 | M4 | Full benchmarks + report | pending |
@@ -36,6 +37,22 @@ measured results and `docs/ARCHITECTURE.md` for design decisions.
 - Python 3.12+
 - Docker (for ElasticMQ, the local SQS-compatible server)
 - No `uv` on this machine → dependencies are managed with `pip` + `pyproject.toml`.
+
+> **Benchmarks run on Linux, not Windows.** Windows is a development environment
+> only; its asyncio ProactorEventLoop is ~2–3× slower at network I/O, so Windows
+> numbers are not comparable to Linux/production. See `docs/BENCHMARKS.md`.
+
+### Benchmark setup (Linux / WSL2)
+
+```bash
+python3 -m venv --without-pip ~/relay-venv    # if ensurepip is missing
+curl -sSL https://bootstrap.pypa.io/get-pip.py | ~/relay-venv/bin/python
+~/relay-venv/bin/pip install -e ".[dev,http,perf]"   # perf pulls uvloop
+```
+
+`uvloop` is wired into all processes automatically when installed (engine/egress
+set the policy; uvicorn auto-selects it). Note: measurements show uvloop does not
+help this SQS-bound workload — see `docs/BENCHMARKS.md`.
 
 ## Setup
 

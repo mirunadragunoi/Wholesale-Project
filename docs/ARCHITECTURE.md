@@ -138,6 +138,31 @@ benchmark-uri procesele sunt oprite forțat. Drenarea curată la oprire e
 implementată (ingress golește buffer-ul, workerii termină lotul în lucru); pe
 producție reală (Linux/containere) SIGTERM funcționează cum trebuie.
 
+## Decizii confirmate sau infirmate de măsurători (M1.5)
+
+Vezi BENCHMARKS.md pentru cifre. Pe scurt:
+
+- **Confirmat — batching-ul obligatoriu contează.** Asimetria producer/consumer
+  (1 apel/10 la scriere vs 2 apeluri/10 la consum) se vede în orice mediu și
+  domină costul. Decizia de a face batching peste tot e validată.
+- **Confirmat — pool-ul de conexiuni e plafon dur.** Rămâne necesar; fără el,
+  înfometare. Nedeschis de M1.5.
+- **Infirmat — uvloop NU ajută acest workload.** Pe Linux, uvloop e marginal mai
+  lent decât asyncio implicit (BENCHMARKS 2.1, 3.2). Gâtuirea e CPU-ul Python din
+  botocore, nu event loop-ul. L-am păstrat cablat (opțional, inofensiv), dar nu e
+  o pârghie. Presupunerea că ar ridica plafonul era greșită.
+- **Nuanțat — „gâtuirea e broker-ul, nu Python".** Adevărat **pentru ElasticMQ**
+  (scalarea plafonează, aritmetica operațiilor se potrivește — BENCHMARKS 3.3).
+  Dar valabil doar pentru un broker JVM unic; generalizarea la SQS real rămâne
+  **ipoteză** (3.4). Concluzia M1 era corectă din motive nedovedite atunci.
+- **Confirmat — backpressure-ul funcționează.** 429-urile masive din M1 erau un
+  artefact de retry în loadgen, nu în platformă (3.5). Buffer-ul de 20.000 e
+  rezonabil, nemodificat.
+
+**Mediu de benchmark: Linux.** Windows rămâne doar mediu de dezvoltare;
+măsurătorile pe Windows nu sunt comparabile (ProactorEventLoop taie ~2/3 din
+debit). Toate cifrele de referință de aici încolo se iau pe Linux.
+
 ## Note de mediu (specifice acestei mașini)
 
 - `uv` nu e disponibil → gestiune cu `pip` + `pyproject.toml` (permis de spec).
