@@ -134,6 +134,30 @@ async def test_dlr_correlation_fails_on_hex_dec_mismatch() -> None:
     await server.wait_closed()
 
 
+def test_egress_passthrough_preserves_raw_bytes() -> None:
+    # An SMPP-origin message carries the wire bytes; egress must NOT re-encode.
+    raw = b"\x05\x00\x03\x2a\x02\x01hello-part-1"  # UDH + payload of a concat part
+    m = Message(
+        id="01U",
+        to="+40712345678",
+        text="decoded text ignored for passthrough",
+        sender=None,
+        source="smpp",
+        received_at=time.time(),
+        attributes={"smpp.raw": raw.hex(), "smpp.esm_class": "0x40", "smpp.data_coding": "8"},
+    )
+    conn = SmppEgressConnector(
+        SmppEgressConfig(host="127.0.0.1", port=1, bind_count=1, system_id="e", password="p")
+    )
+    encoded = conn._encode_for(m, dest="40712345678")
+    assert encoded.encoding == "passthrough"
+    assert len(encoded.segments) == 1
+    seg = encoded.segments[0]
+    assert seg.data == raw  # byte-for-byte, UDH intact
+    assert seg.esm_class == 0x40
+    assert seg.data_coding == 8
+
+
 async def test_sink_counts_duplicate_ulids() -> None:
     # The connector carries our ULID in a TLV; the sink dedups by it.
     sink = smpp_sink.Sink(smpp_sink.SinkConfig())

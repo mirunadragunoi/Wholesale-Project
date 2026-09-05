@@ -20,6 +20,7 @@ from enum import Enum, auto
 
 from relay.common.config import SmppEgressConfig
 from relay.common.logging import get_logger
+from relay.common.message import Message
 from relay.common.metrics import (
     egress_submit_duration_seconds,
     egress_submitted_total,
@@ -30,7 +31,7 @@ from relay.common.metrics import (
 from relay.egress.shaper import TokenBucket
 from relay.queues.base import ReceivedMessage
 from relay.smpp.constants import ErrorCategory, Tlv, classify
-from relay.smpp.encoding import EncodedMessage, encode_message
+from relay.smpp.encoding import EncodedMessage, Segment, encode_message
 from relay.smpp.pdu import PDU, BindTransceiver, DeliverSm, SubmitSm, SubmitSmResp
 from relay.smpp.session import (
     BindError,
@@ -148,11 +149,21 @@ class SmppEgressConnector:
         results = await asyncio.gather(*(self._submit_message(item) for item in batch))
         return [handle for handle, delete in results if delete]
 
+    def _encode_for(self, msg: Message, dest: str) -> EncodedMessage:
+        """Pass through the original SMPP wire bytes when the message came from an
+        SMPP ingress (preserves UDH/esm_class for concatenation); otherwise encode
+        from text."""
+        raw = msg.attributes.get("smpp.raw")
+        if raw is not None:
+            esm = int(msg.attributes.get("smpp.esm_class", "0"), 0)
+            data_coding = int(msg.attributes.get("smpp.data_coding", "0"))
+            return EncodedMessage("passthrough", [Segment(bytes.fromhex(raw), data_coding, esm)])
+        return encode_message(msg.text, ref=self._next_ref(dest))
+
     async def _submit_message(self, item: ReceivedMessage) -> tuple[str, bool]:
         msg = item.message
         dest = msg.to.lstrip("+")
-        ref = self._next_ref(dest)
-        encoded = encode_message(msg.text, ref=ref)
+        encoded = self._encode_for(msg, dest)
         outcome = await self._submit_segments(encoded, msg.id, dest, msg.sender)
 
         result_label = outcome.name.lower()

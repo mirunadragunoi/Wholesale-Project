@@ -1,0 +1,27 @@
+service:
+  connector: smpp
+  host: ${SMPP_BIND_HOST:0.0.0.0}
+  port: ${SMPP_BIND_PORT:2775}
+  metrics_port: ${INGRESS_METRICS_PORT:9104}
+  log_level: ${LOG_LEVEL:INFO}
+  ingress_queue: ingress
+  internal_queue_maxsize: 20000
+  publisher_workers: 16
+  credentials:
+    esme: ${SMPP_PASSWORD:password}
+  ip_allowlist: []          # empty = allow all
+  max_binds_per_system: 4
+  tps_per_system: 0.0       # 0 = unlimited
+  smsc_system_id: relay-smsc
+
+queue:
+  backend: sqs
+  serializer: ${SERIALIZER:json}
+  queues:
+    ingress: ingress
+  sqs:
+    region: ${AWS_REGION:us-east-1}
+    endpoint_url: ${SQS_ENDPOINT:http://localhost:9324}
+    wait_time_seconds: 1
+    visibility_timeout: 60
+    max_pool_connections: 64
