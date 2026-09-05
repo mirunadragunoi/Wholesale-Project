@@ -1,0 +1,21 @@
+service:
+  connector: csv
+  metrics_port: ${INGRESS_METRICS_PORT:9105}
+  log_level: ${LOG_LEVEL:INFO}
+  ingress_queue: ingress
+  path: ${CSV_PATH:campaign.csv}
+  rate: ${CSV_RATE:0}          # msg/s injection rate; 0 = unlimited
+  batch_size: 10
+  progress_every: 100000
+
+queue:
+  backend: sqs
+  serializer: ${SERIALIZER:json}
+  queues:
+    ingress: ingress
+  sqs:
+    region: ${AWS_REGION:us-east-1}
+    endpoint_url: ${SQS_ENDPOINT:http://localhost:9324}
+    wait_time_seconds: 1
+    visibility_timeout: 60
+    max_pool_connections: 64

@@ -8,9 +8,15 @@ from typing import Any
 
 import uvicorn
 
-from relay.common.config import HttpIngressConfig, SmppIngressConfig, load_config
+from relay.common.config import (
+    CsvIngressConfig,
+    HttpIngressConfig,
+    SmppIngressConfig,
+    load_config,
+)
 from relay.common.logging import configure_logging, get_logger
 from relay.common.worker import install_shutdown
+from relay.ingress.csv_connector import CsvIngress
 from relay.ingress.http_connector import create_app
 from relay.ingress.smpp_connector import SmppIngress
 
@@ -55,6 +61,9 @@ def main() -> None:
     _install_uvloop()
     if connector_type == "smpp":
         asyncio.run(run_smpp(SmppIngressConfig.from_dict(raw)))
+    elif connector_type == "csv":
+        stats = asyncio.run(CsvIngress(CsvIngressConfig.from_dict(raw)).run())
+        _log.info("csv_ingest_complete", total=stats.total, sent=stats.sent, skipped=stats.skipped)
     else:
         run_http(raw)
 

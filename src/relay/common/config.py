@@ -161,6 +161,32 @@ class SmppIngressConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class CsvIngressConfig:
+    metrics_port: int = 9105
+    log_level: str = "INFO"
+    ingress_queue: str = "ingress"
+    path: str = "campaign.csv"
+    rate: float = 0.0  # msg/s injection rate; 0 = unlimited
+    batch_size: int = 10
+    progress_every: int = 100_000
+    queue: QueueConfig = field(default_factory=QueueConfig)
+
+    @staticmethod
+    def from_dict(data: dict[str, Any]) -> CsvIngressConfig:
+        svc = data.get("service", {})
+        return CsvIngressConfig(
+            metrics_port=int(svc.get("metrics_port", 9105)),
+            log_level=str(svc.get("log_level", "INFO")),
+            ingress_queue=str(svc.get("ingress_queue", "ingress")),
+            path=str(svc.get("path", "campaign.csv")),
+            rate=float(svc.get("rate", 0.0)),
+            batch_size=int(svc.get("batch_size", 10)),
+            progress_every=int(svc.get("progress_every", 100_000)),
+            queue=QueueConfig.from_dict(data.get("queue", {})),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class EngineConfig:
     metrics_port: int = 9102
     log_level: str = "INFO"
