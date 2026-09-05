@@ -90,3 +90,85 @@ class QueueConfig:
             queues=dict(data.get("queues", {})),
             sqs=SqsConfig.from_dict(data.get("sqs", {})),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class HttpIngressConfig:
+    http_host: str = "0.0.0.0"  # dev POC binds all interfaces by design
+    http_port: int = 8080
+    metrics_port: int = 9101
+    log_level: str = "INFO"
+    auth_token: str = "devtoken"
+    ingress_queue: str = "ingress"
+    internal_queue_maxsize: int = 20_000  # bounded → 429 on overflow (backpressure)
+    publisher_workers: int = 16
+    max_batch_size: int = 1000  # /v1/messages/batch limit
+    queue: QueueConfig = field(default_factory=QueueConfig)
+
+    @staticmethod
+    def from_dict(data: dict[str, Any]) -> HttpIngressConfig:
+        svc = data.get("service", {})
+        return HttpIngressConfig(
+            http_host=str(svc.get("http_host", "0.0.0.0")),
+            http_port=int(svc.get("http_port", 8080)),
+            metrics_port=int(svc.get("metrics_port", 9101)),
+            log_level=str(svc.get("log_level", "INFO")),
+            auth_token=str(svc.get("auth_token", "devtoken")),
+            ingress_queue=str(svc.get("ingress_queue", "ingress")),
+            internal_queue_maxsize=int(svc.get("internal_queue_maxsize", 20_000)),
+            publisher_workers=int(svc.get("publisher_workers", 16)),
+            max_batch_size=int(svc.get("max_batch_size", 1000)),
+            queue=QueueConfig.from_dict(data.get("queue", {})),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class EngineConfig:
+    metrics_port: int = 9102
+    log_level: str = "INFO"
+    in_queue: str = "ingress"
+    out_queue: str = "egress"
+    workers: int = 16
+    queue: QueueConfig = field(default_factory=QueueConfig)
+
+    @staticmethod
+    def from_dict(data: dict[str, Any]) -> EngineConfig:
+        svc = data.get("service", {})
+        return EngineConfig(
+            metrics_port=int(svc.get("metrics_port", 9102)),
+            log_level=str(svc.get("log_level", "INFO")),
+            in_queue=str(svc.get("in_queue", "ingress")),
+            out_queue=str(svc.get("out_queue", "egress")),
+            workers=int(svc.get("workers", 16)),
+            queue=QueueConfig.from_dict(data.get("queue", {})),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class HttpEgressConfig:
+    metrics_port: int = 9103
+    log_level: str = "INFO"
+    egress_queue: str = "egress"
+    workers: int = 16
+    endpoint_url: str = "http://localhost:8090/sink"
+    connector_name: str = "http"
+    http_pool_limit: int = 100
+    request_timeout_s: float = 30.0
+    tps_limit: float = 0.0  # 0 = unlimited
+    queue: QueueConfig = field(default_factory=QueueConfig)
+
+    @staticmethod
+    def from_dict(data: dict[str, Any]) -> HttpEgressConfig:
+        svc = data.get("service", {})
+        return HttpEgressConfig(
+            metrics_port=int(svc.get("metrics_port", 9103)),
+            log_level=str(svc.get("log_level", "INFO")),
+            egress_queue=str(svc.get("egress_queue", "egress")),
+            workers=int(svc.get("workers", 16)),
+            endpoint_url=str(svc.get("endpoint_url", "http://localhost:8090/sink")),
+            connector_name=str(svc.get("connector_name", "http")),
+            http_pool_limit=int(svc.get("http_pool_limit", 100)),
+            request_timeout_s=float(svc.get("request_timeout_s", 30.0)),
+            tps_limit=float(svc.get("tps_limit", 0.0)),
+            queue=QueueConfig.from_dict(data.get("queue", {})),
+        )

@@ -66,6 +66,10 @@ class Consumer(ABC):
 class QueueBackend(ABC):
     """Factory for producers/consumers over named logical queues."""
 
+    async def start(self) -> None:
+        """Open any shared resources (network clients). No-op by default."""
+        return None
+
     @abstractmethod
     async def producer(self, queue: str) -> Producer: ...
 
