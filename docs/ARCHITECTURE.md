@@ -110,6 +110,34 @@ YAML + interpolare `${VAR}` / `${VAR:default}` din mediu. Zero valori hardcodate
 Credențialele **nu** stau în YAML — accesul AWS folosește lanțul standard de
 credențiale (env, config partajat, rol de instanță).
 
+## M1 — conectori HTTP și structura proceselor
+
+- **Ingress HTTP** (`ingress/http_connector.py`): FastAPI. Cererile acceptate
+  intră într-o `asyncio.Queue` **mărginită**; un pool de workeri o drenează în
+  loturi de 10 către coada SQS `ingress`. Buffer plin → **429** (backpressure),
+  nu bufferare nelimitată. Auth = un singur token static în header `X-Auth-Token`.
+- **Engine** (`engine/pipeline.py` + `main.py`): consumă `ingress`, rulează
+  pipeline-ul (o listă de etape async; o etapă no-op deocamdată), publică pe
+  `egress`. Adăugarea unei etape reale = o linie în listă.
+- **Egress HTTP** (`egress/http_connector.py`): consumă `egress`, face POST la un
+  endpoint configurabil pe un pool aiohttp reutilizat, aplică token bucket-ul
+  pentru TPS, și observă latența end-to-end (`now - received_at`).
+- **Measurement**: `received_at` ștampilat la accept-ul HTTP se propagă până la
+  sink, care calculează latența reală end-to-end. Pentru latență corectă,
+  load-gen-ul poate **pace-ui** submit-ul (`--rate`) sub plafon; altfel se
+  formează coadă și latența devine timp de ședere, nu de tranzit (vezi
+  BENCHMARKS.md, M1).
+
+### Oprire curată (SIGTERM) — limitare pe Windows
+
+`common/worker.py::install_shutdown` folosește `loop.add_signal_handler` pe POSIX
+și cade pe `signal.signal` pe Windows (unde `add_signal_handler` nu e
+implementat). Pe Windows, SIGTERM „real" (kill din alt proces) nu declanșează
+handler-ul Python fiabil; doar Ctrl+C (SIGINT) în consolă îl declanșează. Pentru
+benchmark-uri procesele sunt oprite forțat. Drenarea curată la oprire e
+implementată (ingress golește buffer-ul, workerii termină lotul în lucru); pe
+producție reală (Linux/containere) SIGTERM funcționează cum trebuie.
+
 ## Note de mediu (specifice acestei mașini)
 
 - `uv` nu e disponibil → gestiune cu `pip` + `pyproject.toml` (permis de spec).

@@ -26,7 +26,7 @@ measured results and `docs/ARCHITECTURE.md` for design decisions.
 | Milestone | Scope | State |
 |-----------|-------|-------|
 | M0 | Foundation + isolated SQS baseline | done (ElasticMQ; real-AWS run pending credentials) |
-| M1 | HTTP → SQS → engine → SQS → HTTP flow | pending |
+| M1 | HTTP → SQS → engine → SQS → HTTP flow | done (ElasticMQ) |
 | M2 | SMPP codec + client (egress) | pending |
 | M3 | SMPP server (ingress) + CSV | pending |
 | M4 | Full benchmarks + report | pending |
@@ -43,6 +43,23 @@ measured results and `docs/ARCHITECTURE.md` for design decisions.
 python -m pip install -e ".[dev,http]"
 docker compose up -d          # start ElasticMQ on :9324
 ```
+
+## Running the M1 flow (HTTP → SQS → engine → SQS → HTTP)
+
+```bash
+docker compose up -d                                   # ElasticMQ
+python tools/http_sink.py --port 8090                  # simulated provider
+python -m relay.egress.main  --config config/egress.yaml
+python -m relay.engine.main  --config config/engine.yaml
+python -m relay.ingress.main --config config/ingress.yaml   # HTTP API on :8080
+
+# drive traffic and measure end-to-end latency:
+python tools/loadgen.py --count 20000 --rate 400       # paced (transit latency)
+python tools/loadgen.py --count 100000                 # saturation (throughput ceiling)
+```
+
+Metrics are exposed per process: ingress `:9101`, engine `:9102`, egress `:9103`
+(`/metrics`).
 
 ## Development
 

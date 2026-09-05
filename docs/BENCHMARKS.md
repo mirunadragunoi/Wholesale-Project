@@ -136,3 +136,86 @@ acest motiv.
 >
 > Plafon dat de: numărul de apeluri API către ElasticMQ (single-JVM) + overhead
 > de semnare/parsare per apel. Serializarea și rețeaua **nu** sunt încă factori.
+
+---
+
+# M1 — Flux complet HTTP → SQS → engine → SQS → HTTP
+
+Trei procese separate (`ingress` HTTP, `engine` pass-through, `egress` HTTP),
+comunicând doar prin cozile `ingress` și `egress` din ElasticMQ. Sink HTTP
+simulat (`tools/http_sink.py`) măsoară latența end-to-end reală din `received_at`.
+
+Toate rulările pe același mediu ca M0 (ElasticMQ local, câte un proces per etapă,
+JSON, 16 workeri/proces). Zero mesaje pierdute în toate testele.
+
+## Verificare corectitudine
+
+`tools/loadgen.py` a trecut 122.000 de mesaje prin flux (2k + 100k + 20k). Metrici
+Prometheus, perfect consistente la capătul lanțului:
+
+```
+relay_ingress_received_total{source="http"}          122000
+relay_engine_processed_total                          122000
+relay_egress_submitted_total{connector="http",result="success"} 122000
+relay_end_to_end_duration_seconds_count               122000
+```
+
+## Latență de tranzit (sarcină sustenabilă — 400 msg/s, 20.000 mesaje)
+
+Sub plafonul de debit, deci fără coadă acumulată: aceasta e latența **reală** de
+traversare a conductei.
+
+| Segment | p50 | p95 | p99 | max |
+|---|---|---|---|---|
+| Accept la ingress (HTTP 202) | 5.8 ms | 9.5 ms | 50.9 ms | — |
+| **End-to-end (ingress→sink)** | **176 ms** | **339 ms** | **422 ms** | 534 ms |
+
+Cele ~176 ms p50 = 2 hop-uri SQS (fiecare cu costul fix de ~40–90 ms din M0) +
+timpii de publish/consume/delete + POST-ul HTTP final. Coerent cu baseline-ul:
+platforma adaugă două traversări de coadă peste dus-întorsul de 40 ms al unei
+singure cozi.
+
+## Debit la saturație (100.000 mesaje, submit nelimitat)
+
+| Metrică | Valoare |
+|---|---|
+| Debit end-to-end (drenare conductă) | **~640 msg/s** |
+| Debit accept ingress (cu backpressure) | ~1 265 msg/s |
+| Respinse 429 (reîncercate) | 3,9 M |
+| e2e p50 / p99 **la saturație** | **54 s / 76 s** |
+
+Interpretare (important, ca să nu se citească greșit p50 = 54 s):
+
+- Oferta de sarcină (~5 000 msg/s la accept) depășește **cu mult** plafonul de
+  drenare al conductei (~640 msg/s). Se formează o coadă uriașă, iar latența
+  end-to-end devine **timp de ședere în coadă**, nu timp de procesare. La 100k
+  mesaje și 640/s, ultimul mesaj așteaptă ~77 s — exact ce se vede.
+- Cele 3,9 M de 429 sunt un artefact al load-gen-ului (32 de workeri reîncearcă
+  la fiecare 50 ms pe un buffer plin), **nu** un semn de pierdere: toate cele
+  100k au fost în final acceptate și livrate. Dovedește însă că backpressure-ul
+  funcționează — ingress-ul respinge, nu se umflă în memorie.
+
+## Cost-ul platformei peste coadă
+
+| | Debit | Raport față de baseline |
+|---|---|---|
+| Baseline M0 — consumer single-hop | ~1 550 msg/s | 1.00× |
+| M1 — flux complet end-to-end | ~640 msg/s | **0.41×** |
+
+Fluxul complet livrează ~41% din debitul unui singur consumator SQS. Motivul e
+structural: fiecare mesaj traversează broker-ul de ~5 ori (1 publish la ingress +
+consume+delete la engine + publish la engine + consume+delete la egress), iar
+toate aceste operații lovesc **același** ElasticMQ single-JVM, care era deja
+plafonul din M0. Engine-ul și egress-ul, fiind pass-through, adaugă CPU
+neglijabil — plafonul rămâne broker-ul de cozi, nu Python-ul nostru.
+
+## Concluzie M1
+
+- Conducta completă funcționează pe calea HTTP, cu corectitudine dovedită
+  (122k mesaje, zero pierderi, metrici consistente).
+- **Latență de tranzit:** ~176 ms p50 / 422 ms p99 la sarcină sustenabilă.
+- **Plafon de debit:** ~640 msg/s end-to-end, adică 0.41× din baseline-ul de
+  coadă. Gâtuirea e ElasticMQ (single-JVM), amplificată de cele ~5 traversări de
+  broker per mesaj. Pe SQS real, unde broker-ul scalează orizontal, ne așteptăm
+  ca acest raport să crească (gâtuirea se mută pe rețea / conexiuni), dar asta
+  rămâne de măsurat (vezi „Ce lipsește").
