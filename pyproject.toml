@@ -17,6 +17,11 @@ http = [
     "uvicorn>=0.29",
     "aiohttp>=3.9",
 ]
+# uvloop is Linux/macOS only; benchmarks run on Linux. On Windows this extra is
+# simply uninstallable, which is fine — the code falls back to default asyncio.
+perf = [
+    "uvloop>=0.19; sys_platform != 'win32'",
+]
 dev = [
     "mypy>=1.10",
     "ruff>=0.5",
@@ -79,6 +84,7 @@ module = [
     "aiobotocore.*",
     "botocore.*",
     "msgpack.*",
+    "uvloop.*",
 ]
 ignore_missing_imports = true
 

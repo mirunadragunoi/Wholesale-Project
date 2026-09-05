@@ -49,6 +49,12 @@ def main() -> None:
     args = parser.parse_args()
     config = HttpEgressConfig.from_dict(load_config(args.config))
     configure_logging(config.log_level)
+    try:
+        import uvloop  # Linux/macOS only; faster event loop for network I/O.
+
+        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+    except ImportError:
+        pass
     asyncio.run(run(config))
 
 
