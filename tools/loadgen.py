@@ -17,6 +17,8 @@ from collections import deque
 
 import aiohttp
 
+from relay.egress.shaper import TokenBucket
+
 
 def _percentile(values: list[float], pct: float) -> float:
     if not values:
@@ -39,7 +41,11 @@ def _build_batches(count: int, batch_size: int, text: str) -> deque[list[dict[st
 
 
 async def _send(
-    session: aiohttp.ClientSession, url: str, token: str, batches: deque[list[dict[str, str]]]
+    session: aiohttp.ClientSession,
+    url: str,
+    token: str,
+    batches: deque[list[dict[str, str]]],
+    shaper: TokenBucket,
 ) -> tuple[list[float], int, int]:
     accept_latencies: list[float] = []
     accepted = 0
@@ -47,6 +53,7 @@ async def _send(
     headers = {"X-Auth-Token": token}
     while batches:
         batch = batches.popleft()
+        await shaper.acquire(len(batch))  # pace submission to --rate (no-op if 0)
         t0 = time.perf_counter()
         try:
             async with session.post(
@@ -97,10 +104,12 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
             async with session.post(f"{args.sink_url}/reset") as resp:
                 await resp.read()
 
+        shaper = TokenBucket(args.rate, capacity=max(args.rate, args.batch_size))
         start = time.perf_counter()
-        results = await asyncio.gather(
-            *(_send(session, args.url, args.token, batches) for _ in range(args.concurrency))
-        )
+        senders = [
+            _send(session, args.url, args.token, batches, shaper) for _ in range(args.concurrency)
+        ]
+        results = await asyncio.gather(*senders)
         submit_elapsed = time.perf_counter() - start
 
         accept_latencies: list[float] = []
@@ -138,6 +147,9 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=500)
     parser.add_argument("--concurrency", type=int, default=32)
     parser.add_argument("--text-size", type=int, default=20)
+    parser.add_argument(
+        "--rate", type=float, default=0.0, help="target submit rate msg/s (0 = unlimited)"
+    )
     parser.add_argument("--out", default=None)
     args = parser.parse_args()
 
