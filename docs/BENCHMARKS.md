@@ -250,3 +250,46 @@ Uneltele existente (`loadgen`, `smpp_sink`), fără unelte noi de benchmark.
 - Debit prin **SMPP ingress** (serverul) vs HTTP ingress — M3.
 - Comportamentul sub `ESME_RTHROTTLED` real la volum (shaper vs throttle furnizor).
 - Toate cele de mai sus pe **SQS real** (fără credențiale).
+
+## M2 (follow-up după feedback) — duplicate și scalare pe binduri
+
+Notă de consecvență: **toate benchmark-urile de flux folosesc uvloop** (implicit
+pe Linux via uvicorn + policy în engine/egress). M1.5 a arătat că uvloop e
+marginal mai lent pentru acest workload, dar îl fixăm pentru comparabilitate
+între milestone-uri.
+
+### Duplicate (măsurat, nu doar acked)
+
+Sink instrumentat să numere ULID-uri unice (TLV 0x1400), disconnect **înainte** de
+`submit_sm_resp` (răspuns pierdut), procesul sink rămâne viu ca să dedublice.
+
+| Metrică | Valoare |
+|---|---|
+| Mesaje logice | 8 000 |
+| Primite de sink (cu ULID) | **8 023** |
+| Unice | **8 000** |
+| **Duplicate** | **23 (~0,29%)** |
+| Pierdute | 0 |
+
+Deduc: **garantăm „cel puțin o dată", nu „exact o dată".** Un `submit_sm_resp`
+pierdut duce la redelivery → furnizorul primește mesajul de două ori. Zero
+pierderi, dar ~0,29% duplicate la această rată de pierdere a răspunsului. Element
+deschis pentru faza de idempotență (vezi SMPP.md).
+
+### Scalare pe număr de binduri (măsurat)
+
+Un singur `smpp_sink` neplafonat, saturație, 15.000 mesaje.
+
+| Binduri | Debit e2e (msg/s) |
+|---|---|
+| 2 | 2 046 |
+| 4 | 2 087 |
+| 8 | 2 086 |
+
+Deduc: **debitul e PLAT pe numărul de binduri** pe ElasticMQ. Toate bindurile se
+leagă, dar throughput-ul nu crește — același plafon de broker ca la scalarea pe
+instanțe (M1.5, 2.4). **Premisa că debitul vine din agregarea multor binduri e
+NEVALIDATĂ pe ElasticMQ**: bindurile nu sunt limita, broker-ul e. Dacă ar scala pe
+SQS real (broker distribuit) rămâne aceeași ipoteză nemăsurată. Ieftin de aflat,
+important: dacă mai târziu pe SQS real bindurile tot nu scalează, ar fi un semnal
+de contenție în client (element deschis M1.5).

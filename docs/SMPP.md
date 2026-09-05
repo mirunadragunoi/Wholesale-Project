@@ -235,10 +235,29 @@ sesiune cu window/enquire_link/timeout/reconectare, client egress cu pool de
 binduri și shaper agregat, clasificarea erorilor (temporar/permanent/fatal),
 corelare `submit_sm_resp → message_id`, recepție și logare DLR.
 
-**Lăsat deoparte (intenționat, POC):**
-- **Reasamblarea mesajelor concatenate la recepție** (server ingress): fiecare
-  `submit_sm` e tratat ca un segment independent; nu reasamblăm multi-part la
-  intrare. De adăugat dacă e nevoie.
+**Elemente deschise, măsurate, de rezolvat în faze ulterioare:**
+
+- **Duplicate (semantică at-least-once).** Cazul de la limită: `submit_sm` pleacă,
+  conexiunea moare **înainte** de `submit_sm_resp`. Mesajul nu se confirmă, coada
+  îl redă, furnizorul îl primește **a doua oară** → abonatul primește 2 SMS, noi
+  plătim de 2 ori. **Măsurat** (sink instrumentat să numere ULID-uri unice,
+  drop-before-resp): la ~8 pierderi forțate de răspuns pe 8.000 mesaje →
+  **primite 8.023, unice 8.000, duplicate 23 (~0,29%)**, zero pierderi. Deci
+  garantăm „cel puțin o dată", nu „exact o dată". **De rezolvat în faza de
+  idempotență** (dedup pe furnizor după ULID / message_id, sau fereastră de
+  deduplicare). Nereparat acum, intenționat.
+
+- **UDH-ul la recepție (server ingress) — LACUNĂ.** Anvelopa `Message` are doar
+  `text`, fără câmp pentru `esm_class` sau octeții UDH. `decode_segment` **scoate**
+  UDH-ul și întoarce doar textul segmentului. Consecință: dacă un client trimite
+  un mesaj concatenat de 3 segmente (3 `submit_sm` cu UDH), implementarea naivă ar
+  produce 3 `Message`-uri independente, iar egress-ul le-ar reencoda ca 3 SMS
+  separate → **3 mesaje rupte pe telefon în loc de unul**. Soluția minimă propusă
+  pentru M3 (fără schimbarea structurii anvelopei): serverul păstrează
+  `esm_class`, `data_coding` și octeții payload/UDH în `attributes` (câmp deja
+  existent), iar egress-ul SMPP face **pass-through transparent** al octeților
+  originali în loc să reencodeze; egress-ul HTTP folosește textul decodat.
+  **În așteptarea aprobării** înainte de implementare.
 - **Pipeline de DLR**: doar logăm și confirmăm cu `deliver_sm_resp`. Fără rutare
   înapoi către client, fără stocare.
 - **`query_sm`, `replace_sm`, `cancel_sm`, `submit_multi`, `data_sm`**: nefolosite

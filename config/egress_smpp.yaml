@@ -3,7 +3,7 @@ service:
   metrics_port: ${EGRESS_METRICS_PORT:9103}
   log_level: ${LOG_LEVEL:INFO}
   egress_queue: egress
-  workers: 8
+  workers: ${EGRESS_WORKERS:8}
   connector_name: smpp
   # provider (smpp_sink for local testing)
   host: ${SMPP_HOST:127.0.0.1}
@@ -11,8 +11,8 @@ service:
   system_id: ${SMPP_SYSTEM_ID:esme}
   password: ${SMPP_PASSWORD:password}
   system_type: ""
-  bind_count: 2
-  window_size: 10
+  bind_count: ${SMPP_BINDS:2}
+  window_size: ${SMPP_WINDOW:10}
   tps_limit: 0.0          # aggregate across binds; 0 = unlimited
   submit_timeout_s: 30.0
   source_addr: RELAY
