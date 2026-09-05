@@ -1,0 +1,35 @@
+service:
+  connector: smpp
+  metrics_port: ${EGRESS_METRICS_PORT:9103}
+  log_level: ${LOG_LEVEL:INFO}
+  egress_queue: egress
+  workers: 8
+  connector_name: smpp
+  # provider (smpp_sink for local testing)
+  host: ${SMPP_HOST:127.0.0.1}
+  port: ${SMPP_PORT:2775}
+  system_id: ${SMPP_SYSTEM_ID:esme}
+  password: ${SMPP_PASSWORD:password}
+  system_type: ""
+  bind_count: 2
+  window_size: 10
+  tps_limit: 0.0          # aggregate across binds; 0 = unlimited
+  submit_timeout_s: 30.0
+  source_addr: RELAY
+  source_ton: 5           # alphanumeric
+  source_npi: 0
+  dest_ton: 1             # international
+  dest_npi: 1             # ISDN/E.164
+  registered_delivery: 0  # 1 to request DLRs
+
+queue:
+  backend: sqs
+  serializer: ${SERIALIZER:json}
+  queues:
+    egress: egress
+  sqs:
+    region: ${AWS_REGION:us-east-1}
+    endpoint_url: ${SQS_ENDPOINT:http://localhost:9324}
+    wait_time_seconds: 1
+    visibility_timeout: 60
+    max_pool_connections: 64

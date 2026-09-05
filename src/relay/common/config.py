@@ -145,6 +145,60 @@ class EngineConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class SmppEgressConfig:
+    metrics_port: int = 9103
+    log_level: str = "INFO"
+    egress_queue: str = "egress"
+    workers: int = 8
+    connector_name: str = "smpp"
+    # provider connection
+    host: str = "127.0.0.1"
+    port: int = 2775
+    system_id: str = "esme"
+    password: str = "password"
+    system_type: str = ""
+    bind_count: int = 2
+    window_size: int = 10
+    tps_limit: float = 0.0  # aggregate across all binds; 0 = unlimited
+    submit_timeout_s: float = 30.0
+    # addressing
+    source_addr: str = "RELAY"
+    source_ton: int = 5  # alphanumeric
+    source_npi: int = 0
+    dest_ton: int = 1  # international
+    dest_npi: int = 1  # ISDN/E.164
+    registered_delivery: int = 0  # 1 to request DLRs
+    queue: QueueConfig = field(default_factory=QueueConfig)
+
+    @staticmethod
+    def from_dict(data: dict[str, Any]) -> SmppEgressConfig:
+        svc = data.get("service", {})
+        return SmppEgressConfig(
+            metrics_port=int(svc.get("metrics_port", 9103)),
+            log_level=str(svc.get("log_level", "INFO")),
+            egress_queue=str(svc.get("egress_queue", "egress")),
+            workers=int(svc.get("workers", 8)),
+            connector_name=str(svc.get("connector_name", "smpp")),
+            host=str(svc.get("host", "127.0.0.1")),
+            port=int(svc.get("port", 2775)),
+            system_id=str(svc.get("system_id", "esme")),
+            password=str(svc.get("password", "password")),
+            system_type=str(svc.get("system_type", "")),
+            bind_count=int(svc.get("bind_count", 2)),
+            window_size=int(svc.get("window_size", 10)),
+            tps_limit=float(svc.get("tps_limit", 0.0)),
+            submit_timeout_s=float(svc.get("submit_timeout_s", 30.0)),
+            source_addr=str(svc.get("source_addr", "RELAY")),
+            source_ton=int(svc.get("source_ton", 5)),
+            source_npi=int(svc.get("source_npi", 0)),
+            dest_ton=int(svc.get("dest_ton", 1)),
+            dest_npi=int(svc.get("dest_npi", 1)),
+            registered_delivery=int(svc.get("registered_delivery", 0)),
+            queue=QueueConfig.from_dict(data.get("queue", {})),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class HttpEgressConfig:
     metrics_port: int = 9103
     log_level: str = "INFO"
