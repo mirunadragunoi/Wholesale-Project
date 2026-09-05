@@ -8,8 +8,13 @@ from relay.engine.pipeline import Pipeline, passthrough
 
 def _msg() -> Message:
     return Message(
-        id="x", to="+40712345678", text="hi", sender=None,
-        source="http", received_at=time.time(), attributes={},
+        id="x",
+        to="+40712345678",
+        text="hi",
+        sender=None,
+        source="http",
+        received_at=time.time(),
+        attributes={},
     )
 
 

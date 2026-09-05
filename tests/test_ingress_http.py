@@ -34,9 +34,7 @@ def test_submit_requires_token(client: TestClient) -> None:
 
 
 def test_submit_accepts_valid(client: TestClient) -> None:
-    resp = client.post(
-        "/v1/messages", json={"to": "+40712345678", "text": "hi"}, headers=AUTH
-    )
+    resp = client.post("/v1/messages", json={"to": "+40712345678", "text": "hi"}, headers=AUTH)
     assert resp.status_code == 202
     assert "id" in resp.json()
 
