@@ -134,6 +134,23 @@ async def test_dlr_correlation_fails_on_hex_dec_mismatch() -> None:
     await server.wait_closed()
 
 
+async def test_sink_counts_duplicate_ulids() -> None:
+    # The connector carries our ULID in a TLV; the sink dedups by it.
+    sink = smpp_sink.Sink(smpp_sink.SinkConfig())
+    server = await asyncio.start_server(sink.handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    conn = await _connector(port)
+    await conn.handle([_msg()])  # ULID 01ULIDTEST
+    await conn.handle([_msg()])  # same ULID again -> duplicate
+    assert sink.submits == 2
+    assert sink.with_id == 2
+    assert len(sink._seen_ids) == 1
+    assert sink.duplicates == 1
+    await conn.stop()
+    server.close()
+    await server.wait_closed()
+
+
 @pytest.mark.parametrize("text", ["salut", "mesaj în română ăâîșț", "a" * 200])
 async def test_various_encodings_ack(text: str) -> None:
     server, port = await _start_sink(smpp_sink.SinkConfig())

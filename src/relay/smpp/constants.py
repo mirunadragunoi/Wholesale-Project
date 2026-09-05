@@ -165,3 +165,6 @@ class Tlv(IntEnum):
     MESSAGE_PAYLOAD = 0x0424
     RECEIPTED_MESSAGE_ID = 0x001E
     MESSAGE_STATE = 0x0427
+    # Vendor-specific range (0x1400-0x3FFF): carry our ULID for end-to-end
+    # correlation and duplicate detection at the provider.
+    RELAY_MESSAGE_ID = 0x1400

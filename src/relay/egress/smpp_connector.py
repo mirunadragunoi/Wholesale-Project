@@ -29,7 +29,7 @@ from relay.common.metrics import (
 )
 from relay.egress.shaper import TokenBucket
 from relay.queues.base import ReceivedMessage
-from relay.smpp.constants import ErrorCategory, classify
+from relay.smpp.constants import ErrorCategory, Tlv, classify
 from relay.smpp.encoding import EncodedMessage, encode_message
 from relay.smpp.pdu import PDU, BindTransceiver, DeliverSm, SubmitSm, SubmitSmResp
 from relay.smpp.session import (
@@ -186,6 +186,8 @@ class SmppEgressConnector:
                 data_coding=segment.data_coding,
                 registered_delivery=self._config.registered_delivery,
                 short_message=segment.data,
+                # Carry our ULID for end-to-end correlation / dup detection.
+                tlvs=((int(Tlv.RELAY_MESSAGE_ID), message_id.encode("latin-1")),),
             )
             try:
                 with egress_submit_duration_seconds.labels(connector=self._name).time():

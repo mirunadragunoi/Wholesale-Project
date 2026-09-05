@@ -26,7 +26,7 @@ from dataclasses import dataclass
 
 from relay.common.logging import configure_logging, get_logger
 from relay.smpp import pdu as pdumod
-from relay.smpp.constants import CommandId, CommandStatus, EsmClass
+from relay.smpp.constants import CommandId, CommandStatus, EsmClass, Tlv
 from relay.smpp.pdu import (
     PDU,
     BindReceiverResp,
@@ -68,8 +68,13 @@ class Sink:
         self._msg_counter = 0
         self._submit_times: deque[float] = deque()
         self._dlr_tasks: set[asyncio.Task[None]] = set()
-        self.submits = 0
+        self.submits = 0  # total submit_sm received (incl. duplicates)
         self.throttled = 0
+        # Duplicate detection by our ULID TLV. Survives reconnections because the
+        # Sink instance is shared across all connections of one process.
+        self._seen_ids: set[str] = set()
+        self.with_id = 0  # submits carrying a ULID
+        self.duplicates = 0  # submits whose ULID was already seen
 
     def _throttled(self) -> bool:
         if self._config.throttle_tps <= 0:
@@ -104,12 +109,16 @@ class Sink:
                     await writer.drain()
                     continue
 
-                stop = await self._respond(pdu, writer)
                 if pdu.command_id == CommandId.SUBMIT_SM:
+                    self._record_submit(pdu)
                     submits_here += 1
+                    # Drop the socket BEFORE responding: the provider received the
+                    # message but the resp is lost -> the client cannot know and
+                    # will redeliver -> the classic at-least-once duplicate.
                     if self._config.drop_after and submits_here >= self._config.drop_after:
-                        _log.warning("sink_abrupt_disconnect", after=submits_here)
+                        _log.warning("sink_abrupt_disconnect_before_resp", after=submits_here)
                         break
+                stop = await self._respond(pdu, writer)
                 if stop:
                     break
         except (asyncio.IncompleteReadError, ConnectionError):
@@ -153,9 +162,24 @@ class Sink:
         await writer.drain()
         return False
 
-    async def _handle_submit(self, pdu: PDU, writer: asyncio.StreamWriter) -> None:
+    def _record_submit(self, pdu: PDU) -> None:
         assert isinstance(pdu, SubmitSm)
         self.submits += 1
+        ulid: str | None = None
+        for tag, value in pdu.tlvs:
+            if tag == int(Tlv.RELAY_MESSAGE_ID):
+                ulid = value.decode("latin-1")
+                break
+        if ulid is None:
+            return
+        self.with_id += 1
+        if ulid in self._seen_ids:
+            self.duplicates += 1
+        else:
+            self._seen_ids.add(ulid)
+
+    async def _handle_submit(self, pdu: PDU, writer: asyncio.StreamWriter) -> None:
+        assert isinstance(pdu, SubmitSm)
         cfg = self._config
         if cfg.latency_ms > 0 or cfg.latency_jitter_ms > 0:
             delay = cfg.latency_ms + random.uniform(0, cfg.latency_jitter_ms)
@@ -216,13 +240,35 @@ class Sink:
             await writer.drain()
 
 
+def _log_stats(sink: Sink, event: str) -> None:
+    _log.info(
+        event,
+        received=sink.submits,
+        with_id=sink.with_id,
+        unique=len(sink._seen_ids),
+        duplicates=sink.duplicates,
+        throttled=sink.throttled,
+    )
+
+
+async def _stats_loop(sink: Sink, interval: float = 2.0) -> None:
+    while True:
+        await asyncio.sleep(interval)
+        _log_stats(sink, "sink_stats")
+
+
 async def main_async(config: SinkConfig, host: str, port: int) -> None:
     sink = Sink(config)
     server = await asyncio.start_server(sink.handle, host, port)
     addr = server.sockets[0].getsockname()
     _log.info("sink_listening", host=addr[0], port=addr[1], config=str(config))
-    async with server:
-        await server.serve_forever()
+    stats_task = asyncio.create_task(_stats_loop(sink))
+    try:
+        async with server:
+            await server.serve_forever()
+    finally:
+        stats_task.cancel()
+        _log_stats(sink, "sink_final_stats")
 
 
 def main() -> None:
