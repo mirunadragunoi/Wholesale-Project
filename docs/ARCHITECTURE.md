@@ -188,14 +188,17 @@ debit). Toate cifrele de referință de aici încolo se iau pe Linux.
   chunk de rânduri o dată, iar citirea (blocantă) rulează în `asyncio.to_thread`,
   niciodată pe event loop. Memorie mărginită (~50 MB pe 5M linii): doar un chunk +
   un batch în memorie. Linii invalide sărite și logate, nu opresc rularea.
-- **Contenție client (element deschis M1.5) — LOCALIZATĂ.** Experimentele pre-M4
-  (vezi BENCHMARKS.md) arată că plafonul per-proces (~1.400–2.050/s) e **calea
-  clientului SQS**: botocore CPU (semnare/parsare, milioane de apeluri) + RTT-ul
-  dus-întors la broker. Conectorul SMPP singur face ~11.000/s per proces
-  (in-memory), deci NU el e limita. Bindurile nu scalează într-un proces (un event
-  loop = un nucleu); **instanțele** (procese) adaugă nuclee. Implicație pentru
-  decizia de limbaj/bibliotecă: un client SQS mai ușor sau alt limbaj ar reduce
-  taxa botocore; RTT-ul la broker rămâne.
+- **Plafonul per-proces — LOCALIZAT (experimente pre-M4, vezi BENCHMARKS.md).**
+  Egress izolat: ~2.750/s pe ElasticMQ vs ~10.300/s in-memory (~3,7×). Cauza NU e
+  conectorul SMPP (~10k/s singur), NU sink-urile (6,5k–35k/s), și — surprinzător —
+  **NU e CPU-ul botocore** (cache pe user-agent dă ~5%, nu 2×). E **dus-întorsul la
+  broker + protocolul SQS** (receive+delete per mesaj). Bindurile nu scalează
+  într-un proces (un nucleu); **instanțele** adaugă nuclee, iar **bindurile scalează
+  liniar când sunt plafonate extern per bind** (cazul de producție: furnizor cu
+  200 TPS/bind → 10 binduri pentru 2.000 TPS). Decizia de limbaj/bibliotecă: a
+  schimba clientul SQS sau limbajul dă câștiguri marginale per proces; pârghiile
+  reale sunt mai multe procese, un broker care scalează, și mai puține traversări
+  de broker per mesaj.
 
 ## Note de mediu (specifice acestei mașini)
 

@@ -48,6 +48,7 @@ class SinkConfig:
     latency_ms: float = 0.0
     latency_jitter_ms: float = 0.0
     throttle_tps: int = 0  # 0 = unlimited
+    throttle_per_bind: bool = False  # if True, throttle_tps applies per connection
     error_rate: float = 0.0
     error_status: int = CommandStatus.ESME_RSUBMITFAIL
     submit_id_format: str = "hex"  # "hex" | "dec"
@@ -76,11 +77,10 @@ class Sink:
         self.with_id = 0  # submits carrying a ULID
         self.duplicates = 0  # submits whose ULID was already seen
 
-    def _throttled(self) -> bool:
+    def _throttled(self, window: deque[float]) -> bool:
         if self._config.throttle_tps <= 0:
             return False
         now = time.monotonic()
-        window = self._submit_times
         while window and now - window[0] > 1.0:
             window.popleft()
         if len(window) >= self._config.throttle_tps:
@@ -92,6 +92,7 @@ class Sink:
         peer = writer.get_extra_info("peername")
         _log.info("sink_connection_open", peer=str(peer))
         submits_here = 0
+        conn_window: deque[float] = deque()  # per-connection throttle window
         try:
             while True:
                 header = await reader.readexactly(4)
@@ -118,7 +119,7 @@ class Sink:
                     if self._config.drop_after and submits_here >= self._config.drop_after:
                         _log.warning("sink_abrupt_disconnect_before_resp", after=submits_here)
                         break
-                stop = await self._respond(pdu, writer)
+                stop = await self._respond(pdu, writer, conn_window)
                 if stop:
                     break
         except (asyncio.IncompleteReadError, ConnectionError):
@@ -128,7 +129,9 @@ class Sink:
                 writer.close()
             _log.info("sink_connection_close", peer=str(peer))
 
-    async def _respond(self, pdu: PDU, writer: asyncio.StreamWriter) -> bool:
+    async def _respond(
+        self, pdu: PDU, writer: asyncio.StreamWriter, conn_window: deque[float]
+    ) -> bool:
         """Answer one PDU. Returns True if the connection should close."""
         cid = pdu.command_id
         seq = pdu.sequence_number
@@ -154,7 +157,7 @@ class Sink:
             await writer.drain()
             return True
         if cid == CommandId.SUBMIT_SM:
-            await self._handle_submit(pdu, writer)
+            await self._handle_submit(pdu, writer, conn_window)
             return False
         writer.write(
             GenericNack(command_status=CommandStatus.ESME_RINVCMDID, sequence_number=seq).encode()
@@ -178,14 +181,17 @@ class Sink:
         else:
             self._seen_ids.add(ulid)
 
-    async def _handle_submit(self, pdu: PDU, writer: asyncio.StreamWriter) -> None:
+    async def _handle_submit(
+        self, pdu: PDU, writer: asyncio.StreamWriter, conn_window: deque[float]
+    ) -> None:
         assert isinstance(pdu, SubmitSm)
         cfg = self._config
         if cfg.latency_ms > 0 or cfg.latency_jitter_ms > 0:
             delay = cfg.latency_ms + random.uniform(0, cfg.latency_jitter_ms)
             await asyncio.sleep(delay / 1000.0)
 
-        if self._throttled():
+        window = conn_window if cfg.throttle_per_bind else self._submit_times
+        if self._throttled(window):
             self.throttled += 1
             writer.write(
                 SubmitSmResp(
@@ -278,6 +284,7 @@ def main() -> None:
     parser.add_argument("--latency-ms", type=float, default=0.0)
     parser.add_argument("--latency-jitter-ms", type=float, default=0.0)
     parser.add_argument("--throttle-tps", type=int, default=0)
+    parser.add_argument("--throttle-per-bind", action="store_true")
     parser.add_argument("--error-rate", type=float, default=0.0)
     parser.add_argument(
         "--error-status",
@@ -297,6 +304,7 @@ def main() -> None:
         latency_ms=args.latency_ms,
         latency_jitter_ms=args.latency_jitter_ms,
         throttle_tps=args.throttle_tps,
+        throttle_per_bind=args.throttle_per_bind,
         error_rate=args.error_rate,
         error_status=args.error_status,
         submit_id_format=args.submit_id_format,

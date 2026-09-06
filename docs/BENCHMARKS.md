@@ -176,7 +176,7 @@ de transfer pe SQS real — de remăsurat acolo).
 
 ## 4. Concluzie despre plafon (revizuită)
 
-> **ÎNLOCUITĂ de secțiunea „Pre-M4 — trei experimente decisive" de la finalul
+> **ÎNLOCUITĂ de secțiunea „Pre-M4 — cinci experimente decisive" de la finalul
 > documentului.** Concluzia de mai jos (M1.5) atribuia plafonul broker-ului
 > ElasticMQ; experimentele pre-M4 arată că sunt DOUĂ plafoane suprapuse, iar cel
 > per-proces e calea clientului SQS (botocore + RTT), nu doar broker-ul.
@@ -339,110 +339,125 @@ de contenție în client (element deschis M1.5).
 
 ---
 
-# Pre-M4 — trei experimente decisive (revizuiește concluzia despre plafon)
+# Pre-M4 — cinci experimente decisive (revizuiește concluzia despre plafon)
 
-Ipoteză testată (a șefului de proiect): confundasem **două plafoane suprapuse** —
-un plafon per-proces (~2.050/s) și un plafon de broker/contenție (~2.600/s), și
-poate simulatoarele erau ele limita. Toate pe Linux · uvloop · ElasticMQ. Fără
-AWS, fără cod nou de funcționalitate.
+Ipoteza (a șefului): confundasem **două plafoane suprapuse** — unul per-proces și
+unul de broker — și poate simulatoarele erau limita. Toate pe Linux · uvloop ·
+ElasticMQ (16 nuclee). Fără AWS, fără cod nou de funcționalitate. **Toate cifrele
+de mai jos sunt dintr-o singură configurație consecventă** (`wait_time=1`, feed cu
+backlog mărginit), ca să fie comparabile.
 
-## Experiment 1 — capacitatea sink-urilor (măsurat)
+## Exp. 1 — capacitatea sink-urilor (măsurat)
 
-Client minimal direct pe sink, fără restul platformei.
-
-| Sink | Capacitate |
+| Sink (1 proces) | Capacitate |
 |---|---|
-| http_sink (1 proces) | **6 545 req/s** |
-| smpp_sink (1 proces) | **35 261 submit/s** |
+| http_sink | **6 545 req/s** |
+| smpp_sink | **35 261 submit/s** |
 
-**Deduc:** sink-urile **NU** sunt limita de ~2.000. Toate măsurătorile anterioare
-au măsurat platforma, nu simulatorul. (Ipoteza „poate e sink-ul" — infirmată.)
+**Deduc:** sink-urile NU sunt limita de ~2.000. (Ipoteza „poate e sink-ul" — infirmată.)
 
-## Experiment 2 — ocolirea brokerului (măsurat)
+## Exp. 2 — ocolirea brokerului, egress izolat (măsurat, reconciliat)
 
-Aceeași cale de egress, dar coadă **in-memory** (fără ElasticMQ, fără botocore)
-vs ElasticMQ; N=40.000; sink separat (capacitate 35k, deci nu e limita).
+Aceeași cale de egress, coadă **in-memory** (fără broker/botocore) vs ElasticMQ;
+feed cu backlog mărginit (coadă superficială, ca în producție); N=40.000.
 
 | Config | 2 binduri | 4 binduri | 8 binduri |
 |---|---|---|---|
-| **In-memory** (fără broker) | 11 662/s | 10 687/s | 11 230/s |
-| **ElasticMQ** (broker + botocore) | 1 427/s | 1 359/s | 1 379/s |
+| **In-memory** | 11 007/s | 9 772/s | 10 128/s |
+| **ElasticMQ** | 2 699/s | 2 804/s | 2 678/s |
+
+**Reconciliere (răspuns la observația de 30%):** o rulare anterioară raporta
+1.427/s pe ElasticMQ — a fost un **artefact de configurare** al harness-ului
+(`wait_time_seconds` lăsat la valoarea implicită botocore de 20, în loc de 1 ca în
+producție), NU adâncimea cozii (prefill vs fed dau ambele ~2.800). Corectat,
+egress-ul izolat pe ElasticMQ face **~2.750/s**, consecvent cu fluxul complet
+(~2.040/s — mai mic acolo pentru că ElasticMQ e împărțit între ingress+engine+egress).
 
 **Deduc — cel mai important rezultat al POC-ului:**
-1. **Fără broker, un singur proces de egress face ~11.000/s — de ~8× mai mult.**
-   Deci plafonul de ~2.000 nu e conectorul SMPP (care poate 11k/s singur), ci
-   **calea clientului de cozi** (botocore + dus-întorsul la broker).
-2. **Debitul e PLAT pe numărul de binduri în AMBELE configurații.** Bindurile
-   într-un singur proces nu adaugă nuclee — un event loop = un nucleu. De asta
-   2/4/8 binduri dau același lucru. **Instanțele** (procese) adaugă nuclee, nu
-   bindurile. Premisa „debit din agregarea multor binduri" e **greșită la nivel
-   de proces**; corect e „debit din agregarea multor procese/instanțe".
-3. **Ipoteza celor două plafoane e CONFIRMATĂ:** plafon per-proces pe calea SQS
-   (~1.400–2.050/s, botocore + RTT broker) + plafon de broker agregat (~2.600/s,
-   unde scalarea pe instanțe din M1.5 plafona: 2 inst → 2.613, 4 → 2.319).
+1. **Fără broker, un proces de egress face ~10.300/s — de ~3,7× mai mult** decât pe
+   ElasticMQ (~2.750). Plafonul de ~2.000 nu e conectorul SMPP (care poate 10k/s
+   singur), ci **calea clientului de cozi** (dus-întorsul la broker + protocolul SQS).
+2. **Debit PLAT pe binduri în ambele configurații** — un event loop = un nucleu.
 
-## Experiment 3 — unde se duce CPU-ul (profilare, `tottime`)
+## Exp. 3 — profilare (`tottime`)
 
-Același egress sub cProfile, memory vs ElasticMQ, 20.000 mesaje.
+**Memory (~10k/s):** codecul SMPP (`_encode_gsm7`, `encode_body`),
+`dataclasses.replace`, prometheus, `socket.send`. **Zero botocore.**
+**ElasticMQ (~2,7k/s), 25M apeluri (vs 8,7M):** ~60% în `epoll.poll` (așteptarea
+dus-întorsului la broker) + CPU botocore (`useragent` 2,7M apeluri, `str.join`,
+`dict.get`).
 
-**Memory (~11k/s):** munca e codecul nostru SMPP (`_encode_gsm7`, `encode_body`),
-`dataclasses.replace`, prometheus `labels`, `socket.send`. **Zero botocore.**
+## Exp. 4 — cât din plafon e botocore (spike cu limită de timp)
 
-**ElasticMQ (~1,4k/s), 25M apeluri de funcție (vs 8,7M):** dominat de ~20 s
-(din 34 s) în `epoll.poll` (așteptarea dus-întorsului la ElasticMQ), **plus** CPU
-botocore: `botocore/useragent.py` genexpr (2,7M apeluri), `str.join` (474k),
-`dict.get` (1,28M).
+`bench_sqs` pe ElasticMQ, cu/fără cache pe user-agent-ul botocore, și la concurență mai mare.
 
-**Deduc:** calea SQS e simultan **I/O-bound pe dus-întorsul brokerului** ȘI
-**taxată de CPU-ul botocore** — niciuna nu se rezolvă cu uvloop (consecvent cu
-M1.5, unde uvloop nu ajuta). Pentru decizia de limbaj/bibliotecă: botocore adaugă
-milioane de apeluri per rundă (user-agent recalculat, semnare, parsare); un client
-SQS mai ușor (sau alt limbaj) ar reduce partea de CPU, dar RTT-ul la broker rămâne.
+| Config | Producer | Consumer |
+|---|---|---|
+| baseline c=64 | 9 475/s | 4 234/s |
+| user-agent cache c=64 | 9 804/s | 4 603/s |
+| baseline c=128 | 8 257/s | 3 967/s |
 
-## Debit CSV (măsurat, lipsea din M3)
+**Deduc:** optimizarea celei mai vizibile ineficiențe botocore (user-agent,
+2,7M apeluri) dă **~5–9%, NU dublare**. Concurența mai mare nu ajută. Deci plafonul
+per-proces **NU** e CPU-ul botocore care s-ar putea elimina ieftin — e **dus-întorsul
+la broker + protocolul SQS** (send = 1 apel/10; receive+delete = 2 apeluri/10). Un
+client mai ușor sau alt limbaj ar da câștiguri **marginale** per proces, nu 2×.
 
-| | |
-|---|---|
-| Parsare + build (in-proces, fără rețea) | ~131.000 rânduri/s |
-| Injectare CSV 1M → ElasticMQ (serial, un batch odată) | **288,6 s = ~3.464/s** |
-| Memorie de vârf (5M linii) | ~50 MB, plată |
+## Exp. 5 — bindurile cu plafon TPS per bind (măsurat)
 
-**Deduc:** conectorul CSV publică **serial** (un batch de 10 odată, fără
-concurență), deci injectarea e limitată de latența per-batch la broker (~3.500/s),
-nu de parsare (131k/s). Pentru pacing de campanie contează oricum rata de
-**drenare** (~1.400–2.000/s), sub care campania trebuie limitată (`--rate`) ca să
-nu se acumuleze coada. (Publicarea serială e o ineficiență minoră a conectorului,
-raportată, nemodificată.)
+Constrângerea de producție lipsea din testul anterior: furnizorii plafonează
+50–500 TPS **per bind**. Cu `smpp_sink --throttle-per-bind 200` (client minimal):
+
+| Binduri | Debit livrat | Așteptat |
+|---|---|---|
+| 2 | 397/s | ~400 |
+| 4 | 794/s | ~800 |
+| 8 | 1 584/s | ~1 600 |
+
+**Deduc — corecție la concluzia anterioară:** afirmasem că „premisa multor binduri
+e greșită". **Nu e greșită — era netestată**, pentru că testul nu conținea
+constrângerea care face bindurile necesare. Cu plafon TPS per bind (cazul de
+producție), **bindurile scalează ~liniar** până la plafonul procesului (~10k/s):
+ca să treci 2.000 TPS printr-un furnizor de 200 TPS/bind, ai nevoie de ~10 binduri.
+Formularea corectă: **bindurile scalează când sunt plafonate extern (producție);
+într-un proces nelimitat nu adaugă nimic (un nucleu).**
 
 ## Concluzie despre plafon — REVIZUITĂ (înlocuiește secțiunea 4)
 
-Erau **două plafoane suprapuse**, pe care le confundasem:
+Erau **două plafoane suprapuse**, confirmate:
 
-1. **Plafon per-proces pe calea clientului de cozi: ~1.400–2.050 msg/s.**
-   Cauza: dus-întorsul la broker (I/O wait) + CPU-ul botocore (semnare/parsare).
-   Bindurile NU-l ridică (un proces = un nucleu). Dovadă: exp. 2 și 3.
-2. **Plafon de broker agregat pe ElasticMQ: ~2.600 msg/s.** Unde scalarea pe
-   instanțe plafonează/regresează. Dovadă: M1.5 (2.4).
+1. **Plafon per-proces pe calea clientului de cozi: ~2.750/s (izolat) / ~2.040/s
+   (în flux).** Cauza dominantă: **dus-întorsul la broker + protocolul SQS**
+   (receive+delete per mesaj), NU CPU-ul botocore (exp. 4: patch ~5%), NU
+   conectorul SMPP (~10k/s singur, exp. 2), NU sink-urile (exp. 1). Bindurile
+   nu-l ridică (un nucleu).
+2. **Plafon de broker agregat pe ElasticMQ: ~2.600/s** — unde scalarea pe instanțe
+   plafona (M1.5).
 
-**Ce NU e plafonul:** conectorul SMPP (~11k/s/proces singur), sink-urile
-(6,5k–35k/s), event loop-ul (uvloop nu ajută), serializarea (M1.5).
+**Corecție onestă (a doua oară):** „gâtuirea e broker-ul, nu Python" era incompletă;
+dar nici „calea e botocore-CPU" nu e corectă — patch-ul pe botocore dă ~5%. Corect:
+**calea clientului SQS (dus-întors broker + protocol multi-apel)**, peste care se
+suprapune plafonul de broker. Codul nostru (SMPP, engine) nu e limita.
 
-**Corecție onestă:** afirmația din M1/M1.5 „gâtuirea e broker-ul, nu Python" era
-**incompletă**. Corect: gâtuirea per-proces e **calea clientului SQS** (botocore
-CPU + RTT broker), iar peste ea se suprapune plafonul de broker. „Python-ul"
-nostru (codecul SMPP, engine-ul) **nu** e limita; botocore (bibliotecă Python
-AWS) **este** o parte din ea.
+**Premisa arhitecturii — validată în forma reală:** debitul vine din agregarea de
+**procese/instanțe** (nuclee) ȘI, la egress, din **binduri plafonate extern**
+(exp. 5). NU din binduri într-un proces nelimitat. Fără broker, un proces face
+10k/s. Rămâne **[IPOTEZĂ]** dacă pe **SQS real** instanțele scalează liniar sau
+lovesc plafonul de RTT/protocol per proces mai devreme.
 
-**Premisa arhitecturii — parțial validată, parțial infirmată:** debitul vine din
-agregarea de **procese/instanțe** (adaugă nuclee), NU din binduri într-un proces.
-Fără broker, un proces face 11k/s, deci codul scalează pe nuclee. Rămâne
-**[IPOTEZĂ]** dacă pe **SQS real** (broker care scalează orizontal) instanțele ar
-scala aproape liniar sau ar lovi plafonul de CPU botocore per proces mai devreme.
-Experimentul decisiv rămas: exp. 2 + scalare pe instanțe, **pe SQS real**.
+## Implicație pentru decizia de limbaj/bibliotecă (măsurat + opinie)
+
+**Măsurat:** plafonul per-proces e RTT broker + protocol SQS, nu CPU botocore
+(patch ~5%). **Opinie:** a rescrie clientul SQS sau a schimba limbajul ar da
+câștiguri marginale per proces — nu merită pentru asta. Pârghiile reale sunt:
+**(a) mai multe procese/instanțe** (scalare pe nuclee), **(b) un broker care
+scalează** (SQS real vs ElasticMQ single-JVM), **(c) mai puține traversări de broker
+per mesaj** (ex. engine care nu re-serializează). Codecul SMPP propriu se justifică
+(~10k/s, nu e limita).
 
 ## Implicație comercială — duplicate
 
-Cele 0,29% duplicate (la pierderi de `submit_sm_resp`) înseamnă, la **1 milion de
-mesaje, ~2.900 SMS-uri trimise de două ori**: abonați deranjați și **cost dublu**
-pentru acele mesaje. Semantica actuală e „cel puțin o dată". Rezolvarea (dedup pe
-ULID / idempotență per furnizor) e obligatorie înainte de producție, nu opțională.
+0,29% duplicate (la pierderi de `submit_sm_resp`) = la **1M mesaje, ~2.900 SMS
+trimise de două ori**: abonați deranjați + **cost dublu**. Semantica e „cel puțin o
+dată". Dedup pe ULID / idempotență per furnizor e **obligatorie** înainte de
+producție.
