@@ -30,7 +30,7 @@ measured results and `docs/ARCHITECTURE.md` for design decisions.
 | M1.5 | Measurement round: Linux/uvloop, horizontal scaling, 429 fix, JSON/msgpack | done (ElasticMQ; real-AWS still pending) |
 | M2 | Own SMPP codec + client (egress) | done (ElasticMQ) |
 | M3 | SMPP server (ingress) + streaming CSV | done (ElasticMQ) |
-| M4 | Full benchmarks + report | pending |
+| M4 | Full benchmarks + report | done (ElasticMQ; real-AWS still the one open item) |
 
 ## Requirements
 

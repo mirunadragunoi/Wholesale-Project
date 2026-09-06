@@ -529,6 +529,56 @@ producție.
 
 ---
 
+# M4 — rezultate finale (1M pe fiecare cale, saturație, throttle)
+
+Linux · uvloop · ElasticMQ. **Zero pierderi în toate rulările.**
+
+## 1M mesaje end-to-end
+
+| Cale | Livrate | Pierdute | Debit sustained | Latență e2e (saturație) |
+|---|---|---|---|---|
+| HTTP → …→ HTTP egress | 1 000 000 | 0 | ~1 285/s | p50 242 s (backlog) |
+| SMPP ingress → …→ HTTP egress | 1 000 000 | 0 | ~1 079/s | p50 285 s (backlog) |
+
+## submit_sm_resp sub saturație (SMPP ingress, 1M, driver 4 binduri × 20)
+
+| p50 | p95 | p99 | max |
+|---|---|---|---|
+| 24,4 ms | 44,4 ms | 57,6 ms | 174,2 ms |
+
+Rata de acceptare a ingress-ului: 2 368 submit/s; 394k `ESME_RMSGQFUL` (backpressure,
+reîncercate); 0 pierderi.
+
+## CSV 5M (recapitulare)
+
+Memorie de vârf ~50 MB (plată), 49 linii invalide sărite, injectare ~3 464/s.
+
+## ESME_RTHROTTLED sub sarcină (furnizor plafonat global la 1 000/s)
+
+| Livrate | Pierdute | Throttle-retries (sink) | Rata livrată |
+|---|---|---|---|
+| 60 000 / 60 000 | 0 | 71 678 | ~698/s |
+
+## Deduc
+
+- **Corectitudine dovedită la scară:** 1M mesaje pe ambele căi, zero pierderi.
+- **submit_sm_resp rămâne sub 100 ms până la p99 (58 ms) chiar la saturație
+  completă.** Designul „acceptă + pune în coadă + răspunde" (fără procesare
+  sincronă) își face treaba — nu blochează window-ul clientului. Outlieri rari
+  (max 174 ms) sub presiune maximă.
+- **Debitul sustained la 1M (~1.080–1.285/s) e sub cel superficial (~2.000/s)**
+  din cauza backlog-ului adânc de pe cozi sub sarcină susținută (ElasticMQ servește
+  mai lent cozile adânci). Latența e integral timp de ședere în coadă, nu de
+  procesare — de aceea latența reală se citește din rulările paced (secțiunea 2.2:
+  77 ms p50), nu din saturație.
+- **RTHROTTLED e tratat fără pierderi** (retry via redelivery), dar platforma **nu
+  face backoff adaptiv** — se bazează pe redelivery, ceea ce irosește round-trip-uri
+  (71k throttle-retries). **Recomandare operațională:** setați shaper-ul egress
+  (`tps_limit`) la TPS-ul contractat per furnizor, ca emisia să se auto-paseze sub
+  plafon și RTHROTTLED să nu apară aproape deloc.
+
+---
+
 # Recomandare pe SQS și pe pași următori (măsurat + opinie)
 
 Regula: **[M]** = măsurat, **[O]** = opinie/recomandare.
