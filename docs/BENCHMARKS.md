@@ -176,7 +176,7 @@ de transfer pe SQS real — de remăsurat acolo).
 
 ## 4. Concluzie despre plafon (revizuită)
 
-> **ÎNLOCUITĂ de secțiunea „Pre-M4 — cinci experimente decisive" de la finalul
+> **ÎNLOCUITĂ de secțiunea „Pre-M4 — șase experimente decisive" de la finalul
 > documentului.** Concluzia de mai jos (M1.5) atribuia plafonul broker-ului
 > ElasticMQ; experimentele pre-M4 arată că sunt DOUĂ plafoane suprapuse, iar cel
 > per-proces e calea clientului SQS (botocore + RTT), nu doar broker-ul.
@@ -339,7 +339,7 @@ de contenție în client (element deschis M1.5).
 
 ---
 
-# Pre-M4 — cinci experimente decisive (revizuiește concluzia despre plafon)
+# Pre-M4 — șase experimente decisive (revizuiește concluzia despre plafon)
 
 Ipoteza (a șefului): confundasem **două plafoane suprapuse** — unul per-proces și
 unul de broker — și poate simulatoarele erau limita. Toate pe Linux · uvloop ·
@@ -422,28 +422,51 @@ ca să treci 2.000 TPS printr-un furnizor de 200 TPS/bind, ai nevoie de ~10 bind
 Formularea corectă: **bindurile scalează când sunt plafonate extern (producție);
 într-un proces nelimitat nu adaugă nimic (un nucleu).**
 
+## Exp. 6 — un plafon sau două? (măsurat)
+
+Cele două cifre pe care le numeam „plafoane" (2.750 per-proces și 2.600 broker)
+diferă cu ~5% — sub variația dintre rulări. Nu pot fi susținute ca limite
+distincte. Test: egress izolat, **1 vs 2 procese** pe ElasticMQ, coadă pre-umplută
+(N=60.000).
+
+| Procese egress | Debit agregat |
+|---|---|
+| 1 | 2 782/s |
+| 2 | 4 342/s (1,56×) |
+
+**Deduc:** e **UN SINGUR plafon — ElasticMQ**, nu două. Dacă ar fi o limită de
+broker fixă la ~2.750, 2 procese ar da tot ~2.750; nu dau (dau 4.342). Dacă ar fi
+o limită per-proces distinctă, 2 procese ar da ~5.500; nici asta. Adevărul: 2
+procese **cresc** debitul, dar **sub-liniar** (1,56×), pentru că ElasticMQ
+(JVM unic) **contendă** pe măsură ce mai mulți clienți îl lovesc. Cei ~2.782/s
+per proces sunt pur și simplu cât extrage un proces dintr-un ElasticMQ
+neîncă-saturat — nu un plafon de CPU per proces (codul face 10k/s fără broker).
+
 ## Concluzie despre plafon — REVIZUITĂ (înlocuiește secțiunea 4)
 
-Erau **două plafoane suprapuse**, confirmate:
+**Un singur plafon: interacțiunea cu ElasticMQ.** Aplicând regula „dacă două cifre
+diferă sub variația dintre rulări, e aceeași cifră", nu susțin o structură în două
+straturi. Modelul corect, susținut de date:
 
-1. **Plafon per-proces pe calea clientului de cozi: ~2.750/s (izolat) / ~2.040/s
-   (în flux).** Cauza dominantă: **dus-întorsul la broker + protocolul SQS**
-   (receive+delete per mesaj), NU CPU-ul botocore (exp. 4: patch ~5%), NU
-   conectorul SMPP (~10k/s singur, exp. 2), NU sink-urile (exp. 1). Bindurile
-   nu-l ridică (un nucleu).
-2. **Plafon de broker agregat pe ElasticMQ: ~2.600/s** — unde scalarea pe instanțe
-   plafona (M1.5).
+- **Codul platformei face ~10.000 msg/s per proces** (in-memory, fără broker —
+  exp. 2). Codecul SMPP, engine-ul, sink-urile NU sunt limita.
+- **Contra ElasticMQ, un proces extrage ~2.780/s**; două procese ~4.340/s
+  (sub-liniar, 1,56× — exp. 6). Diferența față de 10k/s e **integral** interacțiunea
+  cu brokerul (dus-întors + protocol SQS), NU CPU botocore (exp. 4: ~5%).
+- ElasticMQ (JVM unic) e **resursa partajată** care contendă; agregatul crește
+  sub-liniar și, cu multe procese/etape, saturează și regresează (M1.5: 4 instanțe
+  în flux complet → 2.319, pentru că 8 procese lovesc același broker).
 
-**Corecție onestă (a doua oară):** „gâtuirea e broker-ul, nu Python" era incompletă;
-dar nici „calea e botocore-CPU" nu e corectă — patch-ul pe botocore dă ~5%. Corect:
-**calea clientului SQS (dus-întors broker + protocol multi-apel)**, peste care se
-suprapune plafonul de broker. Codul nostru (SMPP, engine) nu e limita.
+**Corecție onestă (a treia oară, și cea corectă):** nu sunt două plafoane. E unul —
+**ElasticMQ** — măsurat pe căi diferite. „2.750 per-proces" și „2.600 broker" erau
+aceeași resursă. Codul nostru (SMPP, engine) nu e limita nicăieri.
 
 **Premisa arhitecturii — validată în forma reală:** debitul vine din agregarea de
-**procese/instanțe** (nuclee) ȘI, la egress, din **binduri plafonate extern**
-(exp. 5). NU din binduri într-un proces nelimitat. Fără broker, un proces face
-10k/s. Rămâne **[IPOTEZĂ]** dacă pe **SQS real** instanțele scalează liniar sau
-lovesc plafonul de RTT/protocol per proces mai devreme.
+**procese/instanțe** ȘI, la egress, din **binduri plafonate extern** (exp. 5). Fără
+broker, un proces face 10k/s. **[IPOTEZĂ, singura rămasă din tot POC-ul]:** dacă pe
+**SQS real** (broker distribuit care scalează orizontal) agregatul crește **liniar**
+cu instanțele — pe ElasticMQ e sub-liniar din contenția JVM-ului unic; pe SQS real
+contenția ar dispărea. Nemăsurat.
 
 ## Implicație pentru decizia de limbaj/bibliotecă (măsurat + opinie)
 
