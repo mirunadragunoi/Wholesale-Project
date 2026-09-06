@@ -40,6 +40,31 @@ dubla capacitatea per broker. (4) Rezolvați problema de **mesaje duplicate**
 (vezi mai jos) înainte de producție — altfel abonații pot primi SMS-uri de două
 ori și plătim dublu.
 
+## Care e „viteza platformei"? — cele patru cifre, în context
+
+În raport apar patru numere diferite pentru debit. Toate sunt corecte; măsoară
+lucruri diferite. Ordonate de la cea mai **constrânsă** condiție (mediu de test
+încărcat la maxim) la cea mai **liberă** (codul singur). Povestea e în progresie:
+cu cât scoatem mai mult din brokerul de test, cu atât crește debitul — până la
+cifra care contează, **~10.000/s per proces**, care răspunde la întrebarea de la
+început.
+
+| Debit | Condiție | Ce măsoară de fapt |
+|---|---|---|
+| **~1.285/s** | 1M mesaje, saturație, flux complet | Mediul de test sub aglomerație maximă: cozile se umplu, brokerul încetinește (vezi mai jos). Cel mai pesimist număr. |
+| **~2.040/s** | 20–60k mesaje, flux complet, coadă superficială | Fluxul întreg (3 procese) când cozile nu apucă să se aglomereze. Numărul „de zi cu zi" al platformei pe acest broker. |
+| **~2.750/s** | Doar egress, izolat, pe ElasticMQ | O singură etapă lovește brokerul (nu trei) — arată cât ia interacțiunea cu brokerul per etapă. |
+| **~10.000/s** ⭐ | Un proces, **fără broker** (coadă in-memory) | **Codul platformei singur.** Aici NU mai e brokerul de test în cale. **Acesta e răspunsul: codul nu e gâtuirea.** |
+
+**De ce 1M dă un număr mai mic decât 20k** (în limbaj simplu): când trimiți un
+milion de mesaje mai repede decât le poate conducta duce mai departe, ele se
+așază la coadă și așteaptă. Brokerul de test (ElasticMQ) devine mai lent când
+coada are sute de mii de mesaje în ea — ca o singură casă de marcat care
+încetinește când rândul se întinde până afară din magazin. La 20k, rândul nu
+apucă să crească atât. Deci **cifra de 1M nu e viteza reală a platformei, ci a
+brokerului de test sub o grămadă uriașă** — un artefact al uneltei de dezvoltare,
+nu al codului. Pe AWS SQS real (distribuit), „casa de marcat" se multiplică.
+
 ---
 
 Rezultatele măsurate ale proiectului `relay`. Documentul e structurat pe cinci

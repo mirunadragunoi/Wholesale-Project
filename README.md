@@ -97,7 +97,8 @@ src/relay/ingress/  HTTP / SMPP / CSV inbound connectors
 src/relay/engine/   pass-through pipeline
 src/relay/egress/   HTTP / SMPP outbound connectors
 tools/              load generator, protocol sinks, isolated SQS benchmark
-docs/               architecture, SMPP notes, benchmark report
+docs/               ARCHITECTURE, SMPP, BENCHMARKS (report + exec summary),
+                    RUNBOOK (reproduce from scratch), NEXT-STEPS (phase 2)
 ```
 
 Code, comments and commit messages are in English; `docs/` may be in Romanian.
