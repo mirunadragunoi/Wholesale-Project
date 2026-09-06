@@ -188,10 +188,14 @@ debit). Toate cifrele de referință de aici încolo se iau pe Linux.
   chunk de rânduri o dată, iar citirea (blocantă) rulează în `asyncio.to_thread`,
   niciodată pe event loop. Memorie mărginită (~50 MB pe 5M linii): doar un chunk +
   un batch în memorie. Linii invalide sărite și logate, nu opresc rularea.
-- **Contenție client (element deschis M1.5):** neobservată în conectorii SMPP.
-  Token bucket-ul egress e partajat intenționat (limită pe furnizor). Scalarea pe
-  binduri e plată pe ElasticMQ (broker-bound), deci nu putem încă vedea dacă
-  bindurile ar introduce contenție pe un broker care scalează.
+- **Contenție client (element deschis M1.5) — LOCALIZATĂ.** Experimentele pre-M4
+  (vezi BENCHMARKS.md) arată că plafonul per-proces (~1.400–2.050/s) e **calea
+  clientului SQS**: botocore CPU (semnare/parsare, milioane de apeluri) + RTT-ul
+  dus-întors la broker. Conectorul SMPP singur face ~11.000/s per proces
+  (in-memory), deci NU el e limita. Bindurile nu scalează într-un proces (un event
+  loop = un nucleu); **instanțele** (procese) adaugă nuclee. Implicație pentru
+  decizia de limbaj/bibliotecă: un client SQS mai ușor sau alt limbaj ar reduce
+  taxa botocore; RTT-ul la broker rămâne.
 
 ## Note de mediu (specifice acestei mașini)
 
