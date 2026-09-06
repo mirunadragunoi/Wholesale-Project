@@ -1,5 +1,47 @@
 # BENCHMARKS
 
+## Rezumat executiv (o pagină, non-tehnic)
+
+**Ce am construit.** Un prototip de platformă de rutare SMS de mare volum: trei
+programe independente legate prin cozi de mesaje — unul care *primește* SMS-uri
+(prin internet/HTTP, prin protocolul telecom SMPP, sau din fișiere CSV de
+campanie), unul care le *procesează*, și unul care le *trimite mai departe* către
+furnizori (prin HTTP sau SMPP). Am scris de la zero suportul pentru protocolul
+SMPP, inclusiv codarea corectă a textului (diacriticele românești, emoji, mesaje
+lungi rupte în bucăți).
+
+**Ce am aflat — răspunsul la întrebarea de la început.** Întrebarea era: poate
+arhitectura asta să ducă volume mari, și unde e limita? **Platforma în sine
+procesează ~10.000 de mesaje pe secundă per program.** Limita de ~2.700/secundă
+pe care am tot măsurat-o **nu vine din codul nostru, ci din brokerul de cozi
+folosit în teste** (ElasticMQ, o unealtă de dezvoltare care rulează într-un
+singur proces). Cu alte cuvinte: **codul nu e gâtuirea; unealta de test e.** Am
+demonstrat asta scoțând brokerul din ecuație — atunci un singur program a sărit
+de la ~2.700 la ~10.000 msg/s.
+
+**Cum crește debitul.** Prin mai multe *programe* rulate în paralel (fiecare pe
+alt nucleu de procesor) și, la trimitere, prin mai multe *conexiuni* către
+furnizor (fiecare furnizor plafonează de obicei fiecare conexiune la 200–500
+mesaje/s prin contract). Am validat: 10 conexiuni de 200/s dau 2.000/s.
+
+**Ce NU știm încă (cea mai importantă limitare).** Toate testele au folosit un
+broker de dezvoltare (ElasticMQ), care rulează pe un singur proces și devine el
+însuși gâtuirea. **Nu am rulat niciodată pe AWS SQS real** — serviciul distribuit
+care ar fi folosit în producție și care, spre deosebire de unealta de test,
+scalează orizontal. Nu putem afirma cu certitudine că platforma scalează liniar
+până la volume foarte mari **fără să o măsurăm pe SQS real.** Costă ~30 de minute
+și sub 5 dolari. **E singura gaură reală rămasă din tot prototipul.**
+
+**Ce recomandăm.** (1) Merită continuat — arhitectura e sănătoasă, codul nu e
+limita. (2) Înainte de orice decizie de scalare, **rulați runda pe AWS SQS real**
+(vezi mai jos). (3) La faza următoare, **reduceți numărul de treceri prin coadă**:
+azi fiecare mesaj trece prin broker de două ori; o singură trecere ar aproape
+dubla capacitatea per broker. (4) Rezolvați problema de **mesaje duplicate**
+(vezi mai jos) înainte de producție — altfel abonații pot primi SMS-uri de două
+ori și plătim dublu.
+
+---
+
 Rezultatele măsurate ale proiectului `relay`. Documentul e structurat pe cinci
 secțiuni; **măsurătorile** (secțiunea 2) sunt separate strict de **interpretări**
 (secțiunea 3). Orice afirmație din secțiunea 3 trimite la o măsurătoare din
@@ -484,3 +526,70 @@ per mesaj** (ex. engine care nu re-serializează). Codecul SMPP propriu se justi
 trimise de două ori**: abonați deranjați + **cost dublu**. Semantica e „cel puțin o
 dată". Dedup pe ULID / idempotență per furnizor e **obligatorie** înainte de
 producție.
+
+---
+
+# Recomandare pe SQS și pe pași următori (măsurat + opinie)
+
+Regula: **[M]** = măsurat, **[O]** = opinie/recomandare.
+
+## Recomand SQS pentru producție?
+
+**Da, cu rezerve — și cu o schimbare de design.**
+
+- **[M]** Codul platformei nu e limita (~10k/s/proces fără broker). Plafonul e
+  interacțiunea cu brokerul de cozi.
+- **[M]** Pe ElasticMQ (broker de dezvoltare, single-JVM) debitul agregat crește
+  sub-liniar cu procesele (contenția JVM-ului unic).
+- **[O]** SQS real e distribuit și scalează orizontal, deci plafonul de broker pe
+  care l-am lovit **ar dispărea sau ar crește mult** — asta e argumentul PENTRU SQS.
+- **[O] Rezervă importantă:** fiecare trecere prin coadă costă un dus-întors de
+  rețea. Pe ElasticMQ localhost RTT-ul e sub o milisecundă; **pe SQS real RTT-ul e
+  de ordinul milisecundelor**, deci debitul *per proces per trecere* va fi MAI MIC
+  decât în testele noastre. Se compensează prin (a) mai multe procese și (b) mai
+  puține treceri. **Nemăsurat — vezi Limitări.**
+
+## Recomandarea de design cea mai importantă: reduceți trecerile prin coadă
+
+- **[M]** Azi fiecare mesaj trece prin broker de **două ori** (ingress→coadă→engine
+  →coadă→egress). Un mesaj livrat = ~5 operații de broker (publish + 2×
+  consume/delete + publish).
+- **[O]** Engine-ul e pass-through. O variantă cu **o singură trecere** — ingress
+  care publică direct pe coada de egress, sau engine-ul integrat în-proces cu unul
+  din capete — ar **aproape dubla** capacitatea per broker și ar înjumătăți costul
+  SQS (SQS se plătește per cerere). E o **decizie de design pentru faza următoare**,
+  nu o optimizare de cod. Pe măsură ce apare logică reală în engine, se cântărește
+  costul unei treceri în plus contra izolării proceselor.
+
+## Ce NU merită
+
+- **[M+O]** Schimbarea clientului SQS (botocore) sau a limbajului **pentru debit**:
+  optimizarea botocore dă ~5% (măsurat), nu 2×. Plafonul e RTT + protocol, nu CPU
+  client. Nu urmăriți asta pentru performanță. (Alte motive — mentenanță, tipuri —
+  pot rămâne valide, dar nu debitul.)
+
+## Alternative de evaluat, dacă RTT-ul SQS devine problemă
+
+- **[O]** Cozi cu latență mai mică / co-locate (Kafka, Redis Streams, NATS) — RTT
+  mai mic per trecere, dar altă complexitate operațională. De evaluat DOAR dacă
+  măsurătoarea pe SQS real arată că RTT-ul e limita.
+- **[M, deja făcut]** Batching maxim (10/apel) + long polling — implementate.
+
+---
+
+# Limitări — de citit înainte de orice decizie de scalare
+
+1. **SQS REAL RĂMÂNE NEMĂSURAT — cea mai mare gaură din prototip.** Toate cifrele
+   sunt pe ElasticMQ (broker de dezvoltare, single-proces). **Ce NU putem afirma
+   fără SQS real:** dacă debitul agregat crește **liniar** cu numărul de instanțe
+   pe un broker care scalează. Pe ElasticMQ e sub-liniar din cauza brokerului, nu a
+   codului — dar asta e o **ipoteză** până o măsurăm pe SQS real. **Cost: ~30 de
+   minute și sub 5 USD.** Rulare: `bench_scaling.py` și experimentele exp. 2/6 fără
+   `--endpoint-url`, cu credențiale AWS în mediu. **Aceasta e singura întrebare
+   deschisă rămasă din tot POC-ul.**
+2. **Duplicate (at-least-once).** ~0,29% la pierderi de răspuns = ~2.900 SMS
+   dublate la 1M. Dedup pe ULID / idempotență e obligatorie înainte de producție.
+3. **Un singur laptop, localhost.** Fără rețea reală între componente, fără test pe
+   mașini separate. RTT-urile reale (rețea, AWS) vor fi mai mari.
+4. **Reasamblarea multi-part la ingress** e pass-through (UDH păstrat în attributes),
+   nu reasamblare reală. Suficient pentru SMPP→SMPP; de completat dacă e nevoie.
